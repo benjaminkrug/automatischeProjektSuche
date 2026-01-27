@@ -1,15 +1,25 @@
-"""Embedding service with retry logic."""
+"""Embedding service with retry logic and cost tracking."""
 
-from typing import List, Optional
+from typing import List, Optional, Tuple, TYPE_CHECKING
 
 import tenacity
 from openai import OpenAI
+from sqlalchemy.orm import Session
 
 from app.core.exceptions import AIProcessingError
 from app.core.logging import get_logger
 from app.settings import Settings, settings as default_settings
 
+if TYPE_CHECKING:
+    pass
+
 logger = get_logger("services.embedding")
+
+
+def _log_ai_usage(db, operation, model, input_tokens, output_tokens, project_id):
+    """Lazy import wrapper for log_ai_usage to avoid circular imports."""
+    from app.ai.cost_tracking import log_ai_usage
+    return log_ai_usage(db, operation, model, input_tokens, output_tokens, project_id)
 
 
 class EmbeddingService:
@@ -39,11 +49,18 @@ class EmbeddingService:
             retry_state.outcome.exception() if retry_state.outcome else "unknown",
         ),
     )
-    def create_embedding(self, text: str) -> List[float]:
+    def create_embedding(
+        self,
+        text: str,
+        db: Optional[Session] = None,
+        project_id: Optional[int] = None,
+    ) -> List[float]:
         """Create embedding vector for text using OpenAI API.
 
         Args:
             text: Text to embed
+            db: Optional database session for cost tracking
+            project_id: Optional project ID for cost tracking
 
         Returns:
             List of floats representing the embedding vector
@@ -63,6 +80,18 @@ class EmbeddingService:
                 input=text,
             )
 
+            # Log AI usage if database session provided
+            if db is not None:
+                total_tokens = response.usage.total_tokens if response.usage else 0
+                _log_ai_usage(
+                    db=db,
+                    operation="embedding",
+                    model=self._settings.embedding_model,
+                    input_tokens=total_tokens,
+                    output_tokens=0,
+                    project_id=project_id,
+                )
+
             return response.data[0].embedding
 
         except Exception as e:
@@ -77,11 +106,18 @@ class EmbeddingService:
         wait=tenacity.wait_exponential(multiplier=1, min=1, max=10),
         retry=tenacity.retry_if_exception_type(Exception),
     )
-    def create_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
+    def create_embeddings_batch(
+        self,
+        texts: List[str],
+        db: Optional[Session] = None,
+        project_id: Optional[int] = None,
+    ) -> List[List[float]]:
         """Create embeddings for multiple texts in a single API call.
 
         Args:
             texts: List of texts to embed
+            db: Optional database session for cost tracking
+            project_id: Optional project ID for cost tracking
 
         Returns:
             List of embedding vectors
@@ -100,6 +136,18 @@ class EmbeddingService:
                 model=self._settings.embedding_model,
                 input=cleaned_texts,
             )
+
+            # Log AI usage if database session provided
+            if db is not None:
+                total_tokens = response.usage.total_tokens if response.usage else 0
+                _log_ai_usage(
+                    db=db,
+                    operation="embedding_batch",
+                    model=self._settings.embedding_model,
+                    input_tokens=total_tokens,
+                    output_tokens=0,
+                    project_id=project_id,
+                )
 
             # Sort by index to maintain order
             sorted_data = sorted(response.data, key=lambda x: x.index)

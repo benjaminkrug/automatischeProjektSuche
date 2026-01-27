@@ -39,7 +39,11 @@
       "Bash(timeout:*)",
       "Bash(venvScriptspython -c \"from app.sourcing.search_config import is_portal_enabled; print\\(''TED:'', is_portal_enabled\\(''ted''\\)\\)\")",
       "Bash(venvScriptspip install feedparser)",
-      "Bash(\"venv/Scripts/pip.exe\" install feedparser)"
+      "Bash(\"venv/Scripts/pip.exe\" install feedparser)",
+      "Bash(venvScriptspython -c \"from app.db.session import SessionLocal; s = SessionLocal\\(\\); print\\(''DB Connection OK''\\); s.close\\(\\)\")",
+      "Bash(streamlit run:*)",
+      "Bash(ping:*)",
+      "Bash(curl:*)"
     ]
   }
 }

@@ -35,19 +35,19 @@ class ScoreBreakdown(BaseModel):
     """Breakdown of score components for transparency."""
 
     skill_match: int = Field(
-        ge=0, le=40, default=0, description="Score for skill matching / keyword score (max 40)"
+        ge=0, le=70, default=0, description="Score for skill matching / keyword score (max 70)"
     )
     experience: int = Field(
-        ge=0, le=25, default=0, description="Score for experience/seniority (max 25)"
+        ge=0, le=12, default=0, description="Score for experience/seniority (max 12)"
     )
     embedding: int = Field(
-        ge=0, le=15, default=0, description="Score from embedding similarity (max 15)"
+        ge=0, le=8, default=0, description="Score from embedding similarity (max 8)"
     )
     market_fit: int = Field(
-        ge=0, le=10, default=0, description="Score for budget/timing fit (max 10)"
+        ge=0, le=5, default=0, description="Score for budget/timing fit (max 5)"
     )
     risk_factors: int = Field(
-        ge=0, le=10, default=0, description="Score for risk assessment (max 10)"
+        ge=0, le=5, default=0, description="Score for risk assessment (max 5)"
     )
 
 

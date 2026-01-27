@@ -6,7 +6,7 @@ ohne LLM-Call, basierend auf dem Keyword-Scoring-Ergebnis.
 
 import re
 from difflib import SequenceMatcher
-from typing import List, Set
+from typing import Dict, List, Set
 
 from app.ai.keyword_scoring import KeywordScoreResult
 from app.core.logging import get_logger
@@ -14,22 +14,40 @@ from app.core.logging import get_logger
 logger = get_logger("ai.skill_overlap")
 
 # Skill-Normalisierungen (verschiedene Schreibweisen -> kanonische Form)
-SKILL_NORMALIZATIONS = {
+SKILL_NORMALIZATIONS: Dict[str, str] = {
     # Vue
     "vue.js": "vue",
     "vuejs": "vue",
     "vue 3": "vue",
     "vue3": "vue",
+    "vue js": "vue",
+    "vue 2": "vue",
     # React
     "reactjs": "react",
     "react.js": "react",
     "react 18": "react",
+    "react js": "react",
+    "react 17": "react",
     # Node
     "node.js": "node",
     "nodejs": "node",
     # Python
     "python3": "python",
     "python 3": "python",
+    "python 3.11": "python",
+    "python developer": "python",
+    "python entwickler": "python",
+    # Java
+    "java developer": "java",
+    "java entwickler": "java",
+    # C#/.NET
+    "c# entwickler": "c#",
+    "c# developer": "c#",
+    ".net entwickler": "c#",
+    ".net developer": "c#",
+    "dotnet": "c#",
+    "entity framework": "c#",
+    "asp.net": "c#",
     # TypeScript
     "ts": "typescript",
     # JavaScript
@@ -39,6 +57,14 @@ SKILL_NORMALIZATIONS = {
     # PostgreSQL
     "postgres": "postgresql",
     "psql": "postgresql",
+    "postgresql datenbank": "postgresql",
+    "postgres datenbank": "postgresql",
+    # SQL
+    "ms sql": "sql",
+    "mssql": "sql",
+    "sql server": "sql",
+    "t-sql": "sql",
+    "mysql datenbank": "mysql",
     # Docker
     "docker-compose": "docker",
     "docker compose": "docker",
@@ -66,8 +92,95 @@ SKILL_NORMALIZATIONS = {
     "full stack": "fullstack",
 }
 
+# Skill-Hierarchie: Überbegriffe → konkrete Skills die das Team beherrscht
+# Wenn ein Überbegriff im Projekt-Text vorkommt, werden diese Skills als Match gewertet
+SKILL_HIERARCHY: Dict[str, Set[str]] = {
+    # Deutsche Überbegriffe - Frontend
+    "frontend-entwickler": {"vue", "react", "angular", "javascript", "typescript"},
+    "frontend entwickler": {"vue", "react", "angular", "javascript", "typescript"},
+    "frontend-entwicklung": {"vue", "react", "angular", "javascript", "typescript"},
+    "frontendentwicklung": {"vue", "react", "angular", "javascript", "typescript"},
+    "ui-entwickler": {"vue", "react", "javascript", "css"},
+    "ui entwickler": {"vue", "react", "javascript", "css"},
+    "ui-entwicklung": {"vue", "react", "javascript", "css"},
+    # Deutsche Überbegriffe - Backend
+    "backend-entwickler": {"python", "java", "c#", "node", "django", "fastapi", "spring"},
+    "backend entwickler": {"python", "java", "c#", "node", "django", "fastapi", "spring"},
+    "backend-entwicklung": {"python", "java", "c#", "node", "django", "fastapi", "spring"},
+    "backendentwicklung": {"python", "java", "c#", "node", "django", "fastapi", "spring"},
+    # Deutsche Überbegriffe - Fullstack
+    "fullstack-entwickler": {"vue", "react", "python", "java", "node", "postgresql"},
+    "fullstack entwickler": {"vue", "react", "python", "java", "node", "postgresql"},
+    "full-stack-entwickler": {"vue", "react", "python", "java", "node", "postgresql"},
+    "fullstackentwickler": {"vue", "react", "python", "java", "node", "postgresql"},
+    # Deutsche Überbegriffe - Web
+    "webentwickler": {"vue", "react", "javascript", "python", "node", "html", "css"},
+    "webentwicklung": {"vue", "react", "javascript", "python", "node", "html", "css"},
+    "web-entwickler": {"vue", "react", "javascript", "python", "node", "html", "css"},
+    "web-entwicklung": {"vue", "react", "javascript", "python", "node", "html", "css"},
+    # Deutsche Überbegriffe - Software
+    "softwareentwickler": {"python", "java", "c#", "javascript", "typescript"},
+    "softwareentwicklung": {"python", "java", "c#", "javascript", "typescript"},
+    "software-entwickler": {"python", "java", "c#", "javascript", "typescript"},
+    "software-entwicklung": {"python", "java", "c#", "javascript", "typescript"},
+    # Deutsche Überbegriffe - Datenbank
+    "datenbankentwickler": {"postgresql", "mysql", "sql", "mongodb"},
+    "datenbankentwicklung": {"postgresql", "mysql", "sql", "mongodb"},
+    "datenbank-entwickler": {"postgresql", "mysql", "sql", "mongodb"},
+    "datenbank-entwicklung": {"postgresql", "mysql", "sql", "mongodb"},
+    # DevOps
+    "devops-engineer": {"docker", "kubernetes", "jenkins", "gitlab", "cicd", "aws", "azure"},
+    "devops engineer": {"docker", "kubernetes", "jenkins", "gitlab", "cicd", "aws", "azure"},
+    "devops": {"docker", "kubernetes", "jenkins", "gitlab", "cicd"},
+    "devops-entwickler": {"docker", "kubernetes", "jenkins", "gitlab", "cicd"},
+    # Cloud
+    "cloud-entwickler": {"aws", "azure", "docker", "kubernetes"},
+    "cloud entwickler": {"aws", "azure", "docker", "kubernetes"},
+    "cloud-architekt": {"aws", "azure", "docker", "kubernetes"},
+    "cloud architekt": {"aws", "azure", "docker", "kubernetes"},
+    # API
+    "api-entwickler": {"rest", "graphql", "python", "node", "fastapi"},
+    "api entwickler": {"rest", "graphql", "python", "node", "fastapi"},
+    "api-entwicklung": {"rest", "graphql", "python", "node", "fastapi"},
+    # Englische Überbegriffe
+    "frontend developer": {"vue", "react", "angular", "javascript", "typescript"},
+    "backend developer": {"python", "java", "c#", "node", "django", "fastapi", "spring"},
+    "fullstack developer": {"vue", "react", "python", "java", "node", "postgresql"},
+    "full stack developer": {"vue", "react", "python", "java", "node", "postgresql"},
+    "web developer": {"vue", "react", "javascript", "python", "node"},
+    "software developer": {"python", "java", "c#", "javascript", "typescript"},
+    "software engineer": {"python", "java", "c#", "javascript", "typescript"},
+}
+
 # Fuzzy-Match-Schwellenwert
 FUZZY_THRESHOLD = 0.8
+
+
+def expand_skill_terms(text: str) -> Set[str]:
+    """Expandiere Überbegriffe zu konkreten Skills.
+
+    Wenn der Text z.B. "Frontend-Entwickler" enthält, werden die
+    konkreten Skills (Vue, React, JavaScript etc.) zurückgegeben.
+
+    Args:
+        text: Projekt-Text (sollte bereits lowercase sein)
+
+    Returns:
+        Set von konkreten Skills die durch Überbegriffe impliziert werden
+    """
+    expanded: Set[str] = set()
+    text_lower = text.lower()
+
+    for term, skills in SKILL_HIERARCHY.items():
+        if term in text_lower:
+            expanded.update(skills)
+            logger.debug(
+                "Skill expansion: '%s' -> %s",
+                term,
+                ", ".join(skills),
+            )
+
+    return expanded
 
 
 def normalize_skill(skill: str) -> str:

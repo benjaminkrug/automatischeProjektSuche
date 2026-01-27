@@ -8,6 +8,8 @@ from typing import Optional, TYPE_CHECKING
 from openai import OpenAI
 from pydantic import ValidationError
 
+from app.ai.cost_tracking import log_ai_usage
+from app.ai.retry import llm_retry
 from app.ai.schemas import (
     ExtendedResearchOutput,
     ExtendedResearchResult,
@@ -31,6 +33,8 @@ def research_client(
     client_name: Optional[str],
     description: Optional[str],
     external_data: Optional[ClientResearch] = None,
+    db=None,
+    project_id: Optional[int] = None,
 ) -> ResearchResult:
     """Research a client and project for informed decision making.
 
@@ -39,6 +43,8 @@ def research_client(
         client_name: Name of the client/organization
         description: Project description
         external_data: Optional external research data from web scraping
+        db: Optional database session for cost tracking
+        project_id: Optional project ID for cost tracking
 
     Returns:
         ResearchResult with analysis
@@ -50,7 +56,18 @@ def research_client(
     prompt = _build_research_prompt(title, client_name, description, external_data)
 
     try:
-        research_output = _call_llm_structured(prompt)
+        research_output, input_tokens, output_tokens = _call_llm_structured(prompt)
+
+        # Log AI usage if database session provided
+        if db is not None:
+            log_ai_usage(
+                db=db,
+                operation="research",
+                model=settings.ai_model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                project_id=project_id,
+            )
     except Exception as e:
         logger.error("Research LLM call failed: %s", e)
         raise AIProcessingError(
@@ -147,8 +164,13 @@ def _has_external_data(external_data: Optional[ClientResearch]) -> bool:
     ])
 
 
-def _call_llm_structured(prompt: str) -> ResearchOutput:
-    """Call LLM with JSON mode and parse response."""
+@llm_retry
+def _call_llm_structured(prompt: str) -> tuple[ResearchOutput, int, int]:
+    """Call LLM with JSON mode and parse response.
+
+    Returns:
+        Tuple of (ResearchOutput, input_tokens, output_tokens)
+    """
     client = OpenAI(api_key=settings.openai_api_key)
 
     response = client.chat.completions.create(
@@ -167,9 +189,13 @@ def _call_llm_structured(prompt: str) -> ResearchOutput:
     raw_content = response.choices[0].message.content or "{}"
     logger.debug("Research LLM raw response: %s", raw_content[:500])
 
+    # Extract token usage
+    input_tokens = response.usage.prompt_tokens if response.usage else 0
+    output_tokens = response.usage.completion_tokens if response.usage else 0
+
     try:
         data = json.loads(raw_content)
-        return ResearchOutput(**data)
+        return ResearchOutput(**data), input_tokens, output_tokens
     except json.JSONDecodeError as e:
         raise ParsingError(
             f"Invalid JSON from LLM: {e}",
@@ -189,6 +215,8 @@ def research_client_extended(
     client_name: Optional[str],
     description: Optional[str],
     external_data: Optional[ClientResearch] = None,
+    db=None,
+    project_id: Optional[int] = None,
 ) -> ExtendedResearchResult:
     """Erweiterte Analyse für Bietergemeinschaft-Eignung.
 
@@ -203,6 +231,8 @@ def research_client_extended(
         client_name: Name of the client/organization
         description: Project description
         external_data: Optional external research data from web scraping
+        db: Optional database session for cost tracking
+        project_id: Optional project ID for cost tracking
 
     Returns:
         ExtendedResearchResult with basis and fit analysis
@@ -214,7 +244,18 @@ def research_client_extended(
     prompt = _build_extended_research_prompt(title, client_name, description, external_data)
 
     try:
-        research_output = _call_llm_extended(prompt)
+        research_output, input_tokens, output_tokens = _call_llm_extended(prompt)
+
+        # Log AI usage if database session provided
+        if db is not None:
+            log_ai_usage(
+                db=db,
+                operation="research_extended",
+                model=settings.ai_model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                project_id=project_id,
+            )
     except Exception as e:
         logger.error("Extended research LLM call failed: %s", e)
         raise AIProcessingError(
@@ -387,8 +428,13 @@ Antworte NUR mit dem JSON-Objekt, ohne zusätzlichen Text."""
     return prompt
 
 
-def _call_llm_extended(prompt: str) -> ExtendedResearchOutput:
-    """Call LLM with JSON mode for extended analysis and parse response."""
+@llm_retry
+def _call_llm_extended(prompt: str) -> tuple[ExtendedResearchOutput, int, int]:
+    """Call LLM with JSON mode for extended analysis and parse response.
+
+    Returns:
+        Tuple of (ExtendedResearchOutput, input_tokens, output_tokens)
+    """
     client = OpenAI(api_key=settings.openai_api_key)
 
     response = client.chat.completions.create(
@@ -413,9 +459,13 @@ def _call_llm_extended(prompt: str) -> ExtendedResearchOutput:
     raw_content = response.choices[0].message.content or "{}"
     logger.debug("Extended research LLM raw response: %s", raw_content[:500])
 
+    # Extract token usage
+    input_tokens = response.usage.prompt_tokens if response.usage else 0
+    output_tokens = response.usage.completion_tokens if response.usage else 0
+
     try:
         data = json.loads(raw_content)
-        return ExtendedResearchOutput(**data)
+        return ExtendedResearchOutput(**data), input_tokens, output_tokens
     except json.JSONDecodeError as e:
         raise ParsingError(
             f"Invalid JSON from LLM: {e}",

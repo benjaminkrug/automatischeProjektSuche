@@ -32,6 +32,43 @@ EARLY_REJECT_KEYWORDS: List[str] = [
     "sps programmierer", "roboterprogrammierung",
 ]
 
+# Industry-Keywords - Branchen die nicht zur Software-Entwicklung passen
+# Projekte mit diesen Keywords werden abgelehnt, AUSSER sie haben Software-Kontext
+EARLY_REJECT_INDUSTRY_KEYWORDS: List[str] = [
+    # Bau/Hochbau/Tiefbau
+    "bauarbeiten", "bauleistungen", "hochbau", "tiefbau", "rohbau",
+    "straßenbau", "brückenbau", "kanalbau", "betonarbeiten",
+    "mauerarbeiten", "dacharbeiten", "estricharbeiten", "putzarbeiten",
+    "fliesenarbeiten", "trockenbau", "gerüstbau", "abbrucharbeiten",
+    "erdarbeiten", "pflasterarbeiten", "asphaltarbeiten",
+    # Elektrotechnik (nicht IT)
+    "elektroinstallation", "starkstrom", "elektroanlagen", "schaltanlagen",
+    "niederspannung", "mittelspannung", "hochspannung", "trafostation",
+    "blitzschutz", "elektromontage",
+    # Mechanik/Maschinenbau
+    "metallbau", "stahlbau", "schweißarbeiten", "rohrleitungsbau",
+    "schlosserei", "feinmechanik", "werkzeugbau", "formenbau",
+    # HVAC/TGA (Technische Gebäudeausrüstung)
+    "heizungsanlage", "lüftungsanlage", "klimaanlage", "sanitärinstallation",
+    "kältetechnik", "wärmepumpe", "heizungsbau", "lüftungsbau",
+    "sanitär", "heizung", "lüftung", "klima",
+    # Facility/Reinigung
+    "gebäudereinigung", "unterhaltsreinigung", "glasreinigung",
+    "winterdienst", "grünflächenpflege", "gartenpflege", "hausmeister",
+    # Sicherheit (physisch)
+    "wachdienst", "objektschutz", "sicherheitsdienst", "pförtnerdienst",
+    "brandmeldeanlage", "einbruchmeldeanlage", "videoüberwachung",
+    # Transport/Logistik (physisch)
+    "spedition", "umzugsleistungen", "möbeltransport", "kurierdienst",
+    # Druck/Büro/Textil
+    "druckerzeugnisse", "drucksachen", "büromöbel", "büroausstattung",
+    "arbeitskleidung", "textilreinigung", "wäscherei",
+    # Catering/Verpflegung
+    "catering", "kantinenservice", "verpflegung", "essenslieferung",
+    # Medizin (nicht IT)
+    "labordiagnostik", "medizinprodukte", "pflegedienstleistung",
+]
+
 # Keywords that are acceptable in context (don't reject if also has these)
 CONTEXT_ALLOW_KEYWORDS: List[str] = [
     "fullstack", "full-stack", "webentwicklung", "webanwendung",
@@ -40,7 +77,26 @@ CONTEXT_ALLOW_KEYWORDS: List[str] = [
 ]
 
 
-def should_skip_project(title: str, description: str = "") -> bool:
+def _has_software_context(text: str) -> bool:
+    """Prüfe ob der Text Software/IT-Kontext enthält.
+
+    Args:
+        text: Text to check (already lowercase)
+
+    Returns:
+        True if software context is found
+    """
+    from app.sourcing.search_config import REQUIRED_CONTEXT_KEYWORDS
+
+    return any(kw in text for kw in REQUIRED_CONTEXT_KEYWORDS)
+
+
+def should_skip_project(
+    title: str,
+    description: str = "",
+    check_industry: bool = True,
+    require_context: bool = True,
+) -> bool:
     """Check if project should be skipped during scraping.
 
     This is a fast, keyword-based filter that runs BEFORE:
@@ -51,13 +107,36 @@ def should_skip_project(title: str, description: str = "") -> bool:
     Args:
         title: Project title
         description: Project description (optional, may be empty)
+        check_industry: Check for industry-reject keywords (Bau, Elektro etc.)
+        require_context: Require software/IT context keywords
 
     Returns:
         True if project should be skipped, False otherwise
     """
     text = f"{title} {description}".lower()
 
-    # Check for early reject keywords
+    # 1. Industry-Check (Bau, Elektro etc.)
+    # Reject if industry keyword found AND no software context
+    if check_industry:
+        for keyword in EARLY_REJECT_INDUSTRY_KEYWORDS:
+            if keyword in text:
+                if not _has_software_context(text):
+                    logger.info(
+                        "Early reject (industry): '%s' (keyword: %s, no software context)",
+                        title[:50],
+                        keyword,
+                    )
+                    return True
+
+    # 2. Context requirement - project must have software/IT context
+    if require_context and not _has_software_context(text):
+        logger.info(
+            "Early reject (no context): '%s' (no software/IT keywords found)",
+            title[:50],
+        )
+        return True
+
+    # 3. Check for early reject keywords (SAP, PHP, etc.)
     reject_found = []
     for keyword in EARLY_REJECT_KEYWORDS:
         if keyword in text:
@@ -87,18 +166,37 @@ def should_skip_project(title: str, description: str = "") -> bool:
     return True
 
 
-def get_skip_reason(title: str, description: str = "") -> str | None:
+def get_skip_reason(
+    title: str,
+    description: str = "",
+    check_industry: bool = True,
+    require_context: bool = True,
+) -> str | None:
     """Get the reason why a project would be skipped.
 
     Args:
         title: Project title
         description: Project description
+        check_industry: Check for industry-reject keywords
+        require_context: Require software/IT context keywords
 
     Returns:
         Reason string if project should be skipped, None otherwise
     """
     text = f"{title} {description}".lower()
 
+    # 1. Industry check
+    if check_industry:
+        for keyword in EARLY_REJECT_INDUSTRY_KEYWORDS:
+            if keyword in text:
+                if not _has_software_context(text):
+                    return f"Industry reject keyword: {keyword}"
+
+    # 2. Context requirement
+    if require_context and not _has_software_context(text):
+        return "No software/IT context found"
+
+    # 3. Early reject keywords
     for keyword in EARLY_REJECT_KEYWORDS:
         if keyword in text:
             # Check context

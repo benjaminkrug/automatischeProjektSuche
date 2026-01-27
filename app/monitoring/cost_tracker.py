@@ -285,8 +285,106 @@ def record_ai_usage(
 
 
 def get_cost_summary() -> Dict:
-    """Get current month's cost summary."""
-    return get_cost_tracker().get_monthly_summary()
+    """Get current month's cost summary from database.
+
+    Reads from the ai_usage table to get actual costs.
+    Falls back to in-memory tracker if database query fails.
+    """
+    try:
+        from datetime import datetime
+        from sqlalchemy import func
+        from app.db.session import SessionLocal
+        from app.db.models import AIUsage
+
+        now = datetime.utcnow()
+        month_start = datetime(now.year, now.month, 1)
+        if now.month == 12:
+            month_end = datetime(now.year + 1, 1, 1)
+        else:
+            month_end = datetime(now.year, now.month + 1, 1)
+
+        session = SessionLocal()
+        try:
+            # Query aggregated data
+            total_cost = (
+                session.query(func.sum(AIUsage.cost_usd))
+                .filter(AIUsage.timestamp >= month_start)
+                .filter(AIUsage.timestamp < month_end)
+                .scalar()
+            ) or 0.0
+
+            total_input = (
+                session.query(func.sum(AIUsage.input_tokens))
+                .filter(AIUsage.timestamp >= month_start)
+                .filter(AIUsage.timestamp < month_end)
+                .scalar()
+            ) or 0
+
+            total_output = (
+                session.query(func.sum(AIUsage.output_tokens))
+                .filter(AIUsage.timestamp >= month_start)
+                .filter(AIUsage.timestamp < month_end)
+                .scalar()
+            ) or 0
+
+            total_ops = (
+                session.query(func.count(AIUsage.id))
+                .filter(AIUsage.timestamp >= month_start)
+                .filter(AIUsage.timestamp < month_end)
+                .scalar()
+            ) or 0
+
+            # By operation
+            by_operation_query = (
+                session.query(
+                    AIUsage.operation,
+                    func.count(AIUsage.id).label("count"),
+                    func.sum(AIUsage.cost_usd).label("cost_usd"),
+                    func.sum(AIUsage.input_tokens).label("input_tokens"),
+                    func.sum(AIUsage.output_tokens).label("output_tokens"),
+                )
+                .filter(AIUsage.timestamp >= month_start)
+                .filter(AIUsage.timestamp < month_end)
+                .group_by(AIUsage.operation)
+                .all()
+            )
+
+            by_operation = {}
+            for row in by_operation_query:
+                by_operation[row.operation] = {
+                    "count": row.count,
+                    "cost_usd": float(row.cost_usd) if row.cost_usd else 0.0,
+                    "input_tokens": row.input_tokens or 0,
+                    "output_tokens": row.output_tokens or 0,
+                }
+
+            # Calculate projections
+            days_elapsed = (min(now, month_end) - month_start).days + 1
+            days_in_month = (month_end - month_start).days
+            total_cost_eur = float(total_cost) * EUR_USD_RATE
+            projected_cost_eur = (total_cost_eur / max(1, days_elapsed)) * days_in_month
+
+            monthly_budget = 2.0
+
+            return {
+                "year": now.year,
+                "month": now.month,
+                "days_elapsed": days_elapsed,
+                "days_in_month": days_in_month,
+                "total_cost_usd": float(total_cost),
+                "total_cost_eur": total_cost_eur,
+                "projected_monthly_cost_eur": projected_cost_eur,
+                "budget_eur": monthly_budget,
+                "budget_remaining_eur": monthly_budget - total_cost_eur,
+                "budget_utilization_percent": (total_cost_eur / monthly_budget) * 100,
+                "total_operations": total_ops,
+                "by_operation": by_operation,
+            }
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning("Failed to get cost summary from database: %s, using in-memory", e)
+        return get_cost_tracker().get_monthly_summary()
 
 
 def estimate_monthly_cost(daily_projects: int = 50) -> Dict:

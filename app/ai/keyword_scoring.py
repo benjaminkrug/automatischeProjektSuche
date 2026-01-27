@@ -1,11 +1,12 @@
 """Erweitertes Keyword-Scoring mit Kategorien, Gewichtung und Kombinationen.
 
-Dieses Modul implementiert ein tiered Keyword-Scoring-System:
-- Tier 1: Kernkompetenzen (8 Punkte pro Keyword, max 24)
-- Tier 2: Starke Passung (5 Punkte pro Keyword, max 15)
-- Tier 3: Nice-to-have (2 Punkte pro Keyword, max 6)
-- Combo-Bonus: Wertvolle Kombinationen (+2 bis +5)
+Dieses Modul implementiert ein tiered Keyword-Scoring-System (70% des Gesamt-Scores):
+- Tier 1: Kernkompetenzen (16 Punkte pro Keyword, max 48)
+- Tier 2: Starke Passung (10 Punkte pro Keyword, max 20)
+- Tier 3: Nice-to-have (4 Punkte pro Keyword, max 8)
+- Combo-Bonus: Wertvolle Kombinationen (+4 bis +10, max 20)
 - Reject: Gewichtete Ausschluss-Keywords
+- Gesamt-Maximum: 70 Punkte
 
 Ersetzt/erweitert das einfache Keyword-Filtering in keyword_filter.py
 mit einem detaillierten Score-Breakdown für die Matching-Entscheidung.
@@ -24,9 +25,9 @@ logger = get_logger("ai.keyword_scoring")
 class KeywordTier(Enum):
     """Keyword-Prioritätsstufen."""
 
-    TIER_1 = "tier_1"  # Kernkompetenz -> +8 pro Keyword
-    TIER_2 = "tier_2"  # Gute Passung -> +5 pro Keyword
-    TIER_3 = "tier_3"  # Nice-to-have -> +2 pro Keyword
+    TIER_1 = "tier_1"  # Kernkompetenz -> +16 pro Keyword
+    TIER_2 = "tier_2"  # Gute Passung -> +10 pro Keyword
+    TIER_3 = "tier_3"  # Nice-to-have -> +4 pro Keyword
     REJECT = "reject"  # Auto-Reject
 
 
@@ -38,10 +39,21 @@ TIER_1_KEYWORDS: Set[str] = {
     "vuejs",
     "nuxt",
     "nuxtjs",
-    # Backend Core
+    # Backend Core - Python
     "python",
     "django",
     "fastapi",
+    # Backend Core - .NET (Benjamin & Viktor)
+    "c#",
+    ".net",
+    "dotnet",
+    "asp.net",
+    "blazor",
+    # Backend Core - Java (Souhail)
+    "java",
+    "spring",
+    "spring boot",
+    "springboot",
     # Fullstack
     "fullstack",
     "full-stack",
@@ -56,6 +68,20 @@ TIER_2_KEYWORDS: Set[str] = {
     "javascript",
     "frontend",
     "front-end",
+    # Frontend Erweitert
+    "html",
+    "css",
+    "scss",
+    "sass",
+    "tailwind",
+    "bootstrap",
+    "webpack",
+    "vite",
+    "next.js",
+    "nextjs",
+    "ui",
+    "ux",
+    "ui/ux",
     # Backend
     "node",
     "nodejs",
@@ -63,6 +89,22 @@ TIER_2_KEYWORDS: Set[str] = {
     "express",
     "nestjs",
     "flask",
+    # .NET Ecosystem
+    "entity framework",
+    "ef core",
+    "ms sql",
+    "mssql",
+    "sql server",
+    "wpf",
+    "winforms",
+    ".net core",
+    "maui",
+    # Java Ecosystem
+    "kotlin",
+    "jpa",
+    "hibernate",
+    "maven",
+    "gradle",
     # Datenbank
     "postgresql",
     "mongodb",
@@ -73,11 +115,57 @@ TIER_2_KEYWORDS: Set[str] = {
     "api",
     "microservice",
     "microservices",
+    # Auth/Security
+    "jwt",
+    "oauth",
+    "oauth2",
+    "authentifizierung",
+    "autorisierung",
+    # Compliance
+    "dsgvo",
+    "datenschutz",
+    "gdpr",
     # Cloud
     "docker",
     "aws",
     "azure",
     "kubernetes",
+    # Deployment & Infrastructure
+    "terraform",
+    "ansible",
+    "helm",
+    "argocd",
+    "github actions",
+    "azure devops",
+    "bitbucket",
+    "vercel",
+    "netlify",
+    "heroku",
+    "gcp",
+    "google cloud",
+    # Vue.js Libraries
+    "vuex",
+    "pinia",
+    "vue router",
+    "vuetify",
+    "quasar",
+    # React Libraries
+    "redux",
+    "zustand",
+    "react query",
+    "mobx",
+    # .NET Libraries
+    "automapper",
+    "dapper",
+    "serilog",
+    "mediatr",
+    "fluentvalidation",
+    "xunit",
+    "nunit",
+    # Java Libraries
+    "lombok",
+    "junit",
+    "mockito",
 }
 
 # Tier 3: Nice-to-have
@@ -99,58 +187,94 @@ TIER_3_KEYWORDS: Set[str] = {
     "linux",
     "jenkins",
     "gitlab",
+    # Frontend Tools
+    "figma",
+    "storybook",
+    "jest",
+    "cypress",
+    "playwright",
+    "less",
+    "styled-components",
+    "material-ui",
+    "mui",
+    "svelte",
+    "web components",
+    # General Libraries
+    "axios",
+    "lodash",
+    "swagger",
+    "openapi",
 }
 
-# Punktwerte pro Tier
+# Punktwerte pro Tier (verdoppelt für 70% Gewichtung)
 TIER_POINTS: Dict[KeywordTier, int] = {
-    KeywordTier.TIER_1: 8,
-    KeywordTier.TIER_2: 5,
-    KeywordTier.TIER_3: 2,
+    KeywordTier.TIER_1: 16,
+    KeywordTier.TIER_2: 10,
+    KeywordTier.TIER_3: 4,
 }
 
 # Maximale Punkte pro Tier (Deckelung)
 TIER_MAX_POINTS: Dict[KeywordTier, int] = {
-    KeywordTier.TIER_1: 24,  # Max 3 Tier-1 Keywords zählen
-    KeywordTier.TIER_2: 15,  # Max 3 Tier-2 Keywords zählen
-    KeywordTier.TIER_3: 6,  # Max 3 Tier-3 Keywords zählen
+    KeywordTier.TIER_1: 48,  # Max 3 Tier-1 Keywords zählen (16 Punkte)
+    KeywordTier.TIER_2: 20,  # Max 2 Tier-2 Keywords zählen (10 Punkte)
+    KeywordTier.TIER_3: 8,   # Max 2 Tier-3 Keywords zählen (4 Punkte)
 }
 
 # GESAMT-MAXIMUM für Keyword-Score
-KEYWORD_SCORE_MAX = 40  # Entspricht 40% des Gesamt-Scores
+KEYWORD_SCORE_MAX = 70  # Entspricht 70% des Gesamt-Scores
 
-# Wertvolle Kombinationen -> Extra-Bonus
+# Wertvolle Kombinationen -> Extra-Bonus (verdoppelt für 70% Gewichtung)
 COMBO_BONUSES: Dict[FrozenSet[str], int] = {
     # Frontend + Backend = Fullstack-Projekt
-    frozenset({"vue", "python"}): 5,
-    frozenset({"vue", "django"}): 5,
-    frozenset({"vue", "fastapi"}): 5,
-    frozenset({"vuejs", "python"}): 5,
-    frozenset({"nuxt", "python"}): 5,
-    frozenset({"react", "python"}): 4,
-    frozenset({"react", "node"}): 4,
-    frozenset({"react", "nodejs"}): 4,
-    frozenset({"angular", "python"}): 4,
+    frozenset({"vue", "python"}): 10,
+    frozenset({"vue", "django"}): 10,
+    frozenset({"vue", "fastapi"}): 10,
+    frozenset({"vuejs", "python"}): 10,
+    frozenset({"nuxt", "python"}): 10,
+    frozenset({"react", "python"}): 8,
+    frozenset({"react", "node"}): 8,
+    frozenset({"react", "nodejs"}): 8,
+    frozenset({"angular", "python"}): 8,
     # Frontend + DB = Vollständiges Projekt
-    frozenset({"vue", "postgresql"}): 3,
-    frozenset({"react", "postgresql"}): 3,
-    frozenset({"vue", "mongodb"}): 3,
+    frozenset({"vue", "postgresql"}): 6,
+    frozenset({"react", "postgresql"}): 6,
+    frozenset({"vue", "mongodb"}): 6,
     # API + Frontend = Moderne Architektur
-    frozenset({"api", "vue"}): 3,
-    frozenset({"graphql", "vue"}): 4,
-    frozenset({"graphql", "react"}): 4,
-    frozenset({"rest", "vue"}): 2,
+    frozenset({"api", "vue"}): 6,
+    frozenset({"graphql", "vue"}): 8,
+    frozenset({"graphql", "react"}): 8,
+    frozenset({"rest", "vue"}): 4,
     # Cloud + Backend = DevOps-Readiness
-    frozenset({"docker", "python"}): 2,
-    frozenset({"kubernetes", "python"}): 3,
-    frozenset({"aws", "python"}): 2,
-    frozenset({"docker", "django"}): 3,
+    frozenset({"docker", "python"}): 4,
+    frozenset({"kubernetes", "python"}): 6,
+    frozenset({"aws", "python"}): 4,
+    frozenset({"docker", "django"}): 6,
     # Fullstack combinations
-    frozenset({"fullstack", "vue"}): 3,
-    frozenset({"fullstack", "python"}): 3,
+    frozenset({"fullstack", "vue"}): 6,
+    frozenset({"fullstack", "python"}): 6,
+    # .NET Kombinationen
+    frozenset({"c#", "asp.net"}): 10,
+    frozenset({"c#", "blazor"}): 10,
+    frozenset({".net", "entity framework"}): 8,
+    frozenset({"c#", "postgresql"}): 6,
+    frozenset({"c#", "ms sql"}): 6,
+    frozenset({"c#", "docker"}): 4,
+    # Java Kombinationen
+    frozenset({"java", "spring"}): 10,
+    frozenset({"java", "spring boot"}): 10,
+    frozenset({"kotlin", "spring"}): 8,
+    frozenset({"java", "postgresql"}): 6,
+    frozenset({"java", "docker"}): 4,
+    # Frontend Kombinationen
+    frozenset({"vue", "tailwind"}): 6,
+    frozenset({"react", "tailwind"}): 6,
+    frozenset({"vue", "typescript"}): 8,
+    frozenset({"react", "typescript"}): 8,
+    frozenset({"next.js", "react"}): 8,
 }
 
 # Maximum combo bonus
-COMBO_BONUS_MAX = 10
+COMBO_BONUS_MAX = 20
 
 # Reject-Keywords mit Schweregrad (gewichtet)
 REJECT_KEYWORDS_WEIGHTED: Dict[str, int] = {
@@ -169,13 +293,7 @@ REJECT_KEYWORDS_WEIGHTED: Dict[str, int] = {
     "drupal": 50,
     "joomla": 50,
     "typo3": 50,
-    # Mobile (falls nicht Kernkompetenz)
-    "ios": 50,
-    "android": 50,
-    "flutter": 50,
-    "react native": 50,
-    "swift": 50,
-    "kotlin": 40,  # Kotlin kann auch Backend sein
+    # Note: kotlin removed - now in TIER_2 as Java ecosystem keyword
     # Leichte Ablehnung (reject wenn Summe > 100)
     "helpdesk": 30,
     "support": 30,
@@ -192,6 +310,60 @@ REJECT_KEYWORDS_WEIGHTED: Dict[str, int] = {
     "maschinenbau": 40,
     "elektrotechnik": 40,
     "embedded": 40,
+    # --- Industry Rejects (Bau, Elektro, Mechanik etc.) ---
+    # Bau/Hochbau/Tiefbau (sofort reject)
+    "bauarbeiten": 150,
+    "bauleistungen": 150,
+    "hochbau": 150,
+    "tiefbau": 150,
+    "rohbau": 150,
+    "straßenbau": 150,
+    "brückenbau": 150,
+    "kanalbau": 150,
+    "betonarbeiten": 150,
+    "mauerarbeiten": 150,
+    "dacharbeiten": 150,
+    "estricharbeiten": 150,
+    "putzarbeiten": 150,
+    "fliesenarbeiten": 150,
+    "trockenbau": 150,
+    "gerüstbau": 150,
+    "abbrucharbeiten": 150,
+    # Elektroinstallation (nicht IT)
+    "elektroinstallation": 150,
+    "starkstrom": 150,
+    "elektroanlagen": 150,
+    "schaltanlagen": 150,
+    "niederspannung": 150,
+    "mittelspannung": 150,
+    "hochspannung": 150,
+    # Mechanik/Metallbau
+    "metallbau": 150,
+    "stahlbau": 150,
+    "schweißarbeiten": 150,
+    "rohrleitungsbau": 150,
+    "schlosserei": 150,
+    # HVAC/TGA
+    "heizungsanlage": 150,
+    "lüftungsanlage": 150,
+    "klimaanlage": 150,
+    "sanitärinstallation": 150,
+    "kältetechnik": 150,
+    # Facility/Reinigung
+    "gebäudereinigung": 150,
+    "unterhaltsreinigung": 150,
+    "winterdienst": 150,
+    "grünflächenpflege": 150,
+    # Sicherheit (physisch)
+    "wachdienst": 150,
+    "objektschutz": 150,
+    "sicherheitsdienst": 150,
+    "pförtnerdienst": 150,
+    # Druck/Büro
+    "druckerzeugnisse": 150,
+    "drucksachen": 150,
+    "büromöbel": 150,
+    "arbeitskleidung": 150,
 }
 
 # Threshold für Auto-Reject (Summe der Reject-Punkte)
@@ -312,7 +484,12 @@ def _find_keywords(text: str, keywords: Set[str]) -> List[str]:
     for keyword in keywords:
         # Use word boundary regex for accurate matching
         # This ensures "api" doesn't match "capital" etc.
-        pattern = rf"\b{re.escape(keyword)}\b"
+        # Special handling for keywords ending with non-word characters (like c#)
+        if keyword.endswith("#") or keyword.startswith("."):
+            # Use lookahead/lookbehind for non-alphanumeric boundaries
+            pattern = rf"(?<![a-zA-Z0-9]){re.escape(keyword)}(?![a-zA-Z0-9])"
+        else:
+            pattern = rf"\b{re.escape(keyword)}\b"
         if re.search(pattern, text):
             found.append(keyword)
     return found

@@ -13,6 +13,8 @@ from app.ai.project_classifier import (
     is_preferred_type,
     get_type_recommendation,
 )
+from app.ai.cost_tracking import log_ai_usage
+from app.ai.retry import llm_retry
 from app.ai.schemas import (
     CandidateProfile,
     ExtendedResearchResult,
@@ -69,6 +71,8 @@ def match_project(
     keyword_score_modifier: int = 0,
     pdf_text: str | None = None,
     keyword_result: Optional[KeywordScoreResult] = None,
+    db=None,
+    project_id: Optional[int] = None,
 ) -> MatchResult:
     """Match a project against team candidates using structured LLM output.
 
@@ -167,7 +171,18 @@ def match_project(
     )
 
     try:
-        match_output = _call_llm_structured(prompt)
+        match_output, input_tokens, output_tokens = _call_llm_structured(prompt)
+
+        # Log AI usage if database session provided
+        if db is not None:
+            log_ai_usage(
+                db=db,
+                operation="matching",
+                model=settings.ai_model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                project_id=project_id,
+            )
     except Exception as e:
         logger.error("LLM call failed: %s", e)
         raise AIProcessingError(
@@ -227,7 +242,7 @@ AUSSCHREIBUNGSUNTERLAGEN (PDF)
 
 KEYWORD-ANALYSE (vorberechnet)
 ==============================
-Keyword-Score: {keyword_result.total_score}/40 Punkte
+Keyword-Score: {keyword_result.total_score}/70 Punkte
 Tier-1 Keywords (Kernkompetenz): {tier_1_kw}
 Tier-2 Keywords (starke Passung): {tier_2_kw}
 Combo-Bonus: +{keyword_result.combo_bonus} Punkte
@@ -261,16 +276,16 @@ Aktive Bewerbungen: {active_applications}/{settings.max_active_applications}
 
 BEWERTUNGSKRITERIEN (Gewichtung beachten)
 =========================================
-- Keyword-Score (vorberechnet): 40%
+- Keyword-Score (vorberechnet): 70%
   (Falls KEYWORD-ANALYSE oben vorhanden: ÜBERNIMM den Wert direkt für skill_match!)
-  (Falls keine KEYWORD-ANALYSE: bewerte Skills manuell 0-40)
-- Erfahrung & Seniorität: 25%
+  (Falls keine KEYWORD-ANALYSE: bewerte Skills manuell 0-70)
+- Erfahrung & Seniorität: 12%
   (Jahre Erfahrung, Projektrelevanz, Branchenkenntnisse)
-- Embedding-Score (Profil-Projekt-Ähnlichkeit): 15%
+- Embedding-Score (Profil-Projekt-Ähnlichkeit): 8%
   (Der vorberechnete Ähnlichkeitswert - höher ist besser)
-- Markt-Fit (Budget, Timing): 10%
+- Markt-Fit (Budget, Timing): 5%
   (Passt das Budget zum Stundensatz? Ist der Zeitrahmen realistisch?)
-- Risikofaktoren (Red Flags, Kapazität): 10%
+- Risikofaktoren (Red Flags, Kapazität): 5%
   (Gibt es Warnzeichen? Ist ausreichend Kapazität vorhanden?)
 
 ENTSCHEIDUNGSSCHWELLEN
@@ -282,11 +297,11 @@ ENTSCHEIDUNGSSCHWELLEN
 Antworte im JSON-Format mit folgenden Feldern:
 - score: Zahl 0-100 (Erfolgswahrscheinlichkeit)
 - score_breakdown: Objekt mit Aufschlüsselung:
-  - skill_match: Keyword-Score oder manuelle Bewertung (0-40)
-  - experience: Punkte für Erfahrung/Seniorität (0-25)
-  - embedding: Punkte aus Embedding-Score (0-15)
-  - market_fit: Punkte für Markt-Fit (0-10)
-  - risk_factors: Punkte für Risikobewertung (0-10)
+  - skill_match: Keyword-Score oder manuelle Bewertung (0-70)
+  - experience: Punkte für Erfahrung/Seniorität (0-12)
+  - embedding: Punkte aus Embedding-Score (0-8)
+  - market_fit: Punkte für Markt-Fit (0-5)
+  - risk_factors: Punkte für Risikobewertung (0-5)
 - best_candidate_name: Name des besten Kandidaten
 - proposed_rate: Empfohlener Stundensatz (unteres Marktsegment, über Mindestrate)
 - rate_reasoning: Begründung für den Stundensatz
@@ -307,11 +322,11 @@ def _clamp_score_breakdown(data: dict) -> dict:
         breakdown = data["score_breakdown"]
         # Define max values for each component
         max_values = {
-            "skill_match": 40,
-            "experience": 25,
-            "embedding": 15,
-            "market_fit": 10,
-            "risk_factors": 10,
+            "skill_match": 70,
+            "experience": 12,
+            "embedding": 8,
+            "market_fit": 5,
+            "risk_factors": 5,
         }
         for key, max_val in max_values.items():
             if key in breakdown and isinstance(breakdown[key], (int, float)):
@@ -325,8 +340,13 @@ def _clamp_score_breakdown(data: dict) -> dict:
     return data
 
 
-def _call_llm_structured(prompt: str) -> MatchOutput:
-    """Call LLM with JSON mode and parse response."""
+@llm_retry
+def _call_llm_structured(prompt: str) -> tuple[MatchOutput, int, int]:
+    """Call LLM with JSON mode and parse response.
+
+    Returns:
+        Tuple of (MatchOutput, input_tokens, output_tokens)
+    """
     client = OpenAI(api_key=settings.openai_api_key)
 
     response = client.chat.completions.create(
@@ -345,11 +365,15 @@ def _call_llm_structured(prompt: str) -> MatchOutput:
     raw_content = response.choices[0].message.content or "{}"
     logger.debug("LLM raw response: %s", raw_content[:500])
 
+    # Extract token usage
+    input_tokens = response.usage.prompt_tokens if response.usage else 0
+    output_tokens = response.usage.completion_tokens if response.usage else 0
+
     try:
         data = json.loads(raw_content)
         # Clamp score_breakdown values to valid ranges
         data = _clamp_score_breakdown(data)
-        return MatchOutput(**data)
+        return MatchOutput(**data), input_tokens, output_tokens
     except json.JSONDecodeError as e:
         raise ParsingError(
             f"Invalid JSON from LLM: {e}",
@@ -472,6 +496,8 @@ def match_project_extended(
     keyword_score_modifier: int = 0,
     pdf_text: str | None = None,
     keyword_result: Optional[KeywordScoreResult] = None,
+    db=None,
+    project_id: Optional[int] = None,
 ) -> MatchResult:
     """Match a project with extended fit analysis for Bietergemeinschaft.
 
@@ -541,6 +567,8 @@ def match_project_extended(
         keyword_score_modifier=keyword_score_modifier,
         pdf_text=pdf_text,
         keyword_result=keyword_result,
+        db=db,
+        project_id=project_id,
     )
 
     # Apply fit-based score adjustments

@@ -185,6 +185,34 @@ REFERENCE_KEYWORDS: List[str] = [
 KEYWORD_BOOST_POINTS: int = 10      # +10 für jedes gute Keyword (max 1x)
 KEYWORD_REJECT_THRESHOLD: int = 1   # 1 schlechtes Keyword = Reject
 
+# Required Context Keywords - Projekte MÜSSEN mindestens eines dieser Keywords enthalten
+# um als Software/IT-Projekt erkannt zu werden
+REQUIRED_CONTEXT_KEYWORDS: List[str] = [
+    # Software/Entwicklung allgemein
+    "software", "softwareentwicklung", "programmierung", "entwicklung",
+    "anwendung", "applikation", "application",
+    # Web
+    "webanwendung", "webportal", "webapp", "web-app", "website",
+    "online-plattform", "webapplikation", "webentwicklung",
+    "internetauftritt", "webseite",
+    # Mobile
+    "mobile app", "app-entwicklung", "mobilanwendung",
+    # IT-Systeme
+    "it-system", "informationssystem", "datenbanksystem", "fachverfahren",
+    "fachanwendung", "it-lösung", "it-projekt", "it-dienstleistung",
+    # Digitalisierung
+    "digitalisierung", "e-government", "ozg", "onlinezugangsgesetz",
+    "digital", "elektronisch",
+    # Technik-Keywords
+    "api", "schnittstelle", "backend", "frontend", "datenbank",
+    "cloud", "server", "hosting", "plattform",
+    # Programmiersprachen/Frameworks (als Kontext)
+    "python", "java", "javascript", "typescript", "vue", "react",
+    "angular", "node", "django", "spring", "docker", "kubernetes",
+    # IT-Beratung
+    "it-beratung", "systemintegration", "softwarearchitektur",
+]
+
 
 def get_portal_config(source_name: str) -> PortalSearchConfig:
     """Get configuration for a portal by name.
