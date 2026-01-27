@@ -44,6 +44,9 @@ def parse_rss_entry(entry: feedparser.FeedParserDict) -> Optional[RawProject]:
     if not _is_it_relevant(combined_text):
         return None
 
+    # Extract publication date from RSS entry
+    published_at = _extract_published_date(entry)
+
     return RawProject(
         source="bund_rss",
         external_id=external_id,
@@ -54,6 +57,7 @@ def parse_rss_entry(entry: feedparser.FeedParserDict) -> Optional[RawProject]:
         skills=_extract_skills(combined_text),
         public_sector=True,
         deadline=deadline,
+        published_at=published_at,
         remote=_check_remote(combined_text),
     )
 
@@ -98,21 +102,17 @@ def _extract_client(title: str, description: str) -> Optional[str]:
 def _extract_deadline(
     title: str, description: str, entry: feedparser.FeedParserDict
 ) -> Optional[datetime]:
-    """Extract submission deadline."""
-    # Try structured date fields first
-    for field in ["published_parsed", "updated_parsed"]:
-        parsed = getattr(entry, field, None)
-        if parsed:
-            try:
-                return datetime(*parsed[:6])
-            except (ValueError, TypeError):
-                pass
+    """Extract submission deadline from text (not from RSS date fields).
 
-    # Try to extract from text
+    Note: RSS date fields (published, updated) are the publication date,
+    NOT the submission deadline. The deadline must be extracted from text.
+    """
     combined = f"{title} {description}"
+
+    # Look for deadline patterns in text
     date_patterns = [
-        r"(?:Abgabefrist|Frist|Deadline|bis)[:\s]+(\d{1,2})[./](\d{1,2})[./](\d{4})",
-        r"(\d{1,2})[./](\d{1,2})[./](\d{4})",
+        r"(?:Abgabefrist|Angebotsfrist|Frist|Deadline|Einreichung bis)[:\s]+(\d{1,2})[./](\d{1,2})[./](\d{4})",
+        r"(?:bis zum|spätestens)[:\s]+(\d{1,2})[./](\d{1,2})[./](\d{4})",
     ]
 
     for pattern in date_patterns:
@@ -160,3 +160,39 @@ def _check_remote(text: str) -> bool:
     """Check if remote work is mentioned."""
     remote_indicators = ["remote", "homeoffice", "home-office", "home office", "mobiles arbeiten"]
     return any(ind in text for ind in remote_indicators)
+
+
+def _extract_published_date(entry: feedparser.FeedParserDict) -> Optional[datetime]:
+    """Extract publication date from RSS entry.
+
+    Args:
+        entry: feedparser entry object
+
+    Returns:
+        Publication datetime or None
+    """
+    # Try structured date fields
+    for field in ["published_parsed", "updated_parsed"]:
+        parsed = getattr(entry, field, None)
+        if parsed:
+            try:
+                return datetime(*parsed[:6])
+            except (ValueError, TypeError):
+                pass
+
+    # Try string date fields
+    for field in ["published", "updated"]:
+        date_str = entry.get(field, "")
+        if date_str:
+            # Try to parse common date formats
+            date_match = re.search(r"(\d{1,2})[./](\d{1,2})[./](\d{4})", date_str)
+            if date_match:
+                try:
+                    day = int(date_match.group(1))
+                    month = int(date_match.group(2))
+                    year = int(date_match.group(3))
+                    return datetime(year, month, day)
+                except ValueError:
+                    continue
+
+    return None

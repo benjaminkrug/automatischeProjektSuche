@@ -1,16 +1,78 @@
 """Normalize and deduplicate scraped projects."""
 
-from datetime import datetime
-from typing import List, Set, Tuple
+from datetime import datetime, timedelta
+from typing import List, Optional, Set, Tuple
 
 from sqlalchemy import tuple_
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
-from app.db.models import Project
+from app.db.models import Project, ScraperRun
 from app.sourcing.base import RawProject
 
 logger = get_logger("sourcing.normalize")
+
+
+def get_last_run_time(db: Session, portal: str) -> Optional[datetime]:
+    """Get the last successful run time for a portal.
+
+    Args:
+        db: Database session
+        portal: Portal name (e.g., 'bund.de', 'dtvp')
+
+    Returns:
+        Datetime of last successful run, or None if never run
+    """
+    last_run = (
+        db.query(ScraperRun)
+        .filter(
+            ScraperRun.portal == portal,
+            ScraperRun.status == "success",
+        )
+        .order_by(ScraperRun.completed_at.desc())
+        .first()
+    )
+    return last_run.completed_at if last_run else None
+
+
+def record_scraper_run(
+    db: Session,
+    portal: str,
+    projects_found: int = 0,
+    new_projects: int = 0,
+    duplicates: int = 0,
+    filtered_old: int = 0,
+    status: str = "success",
+    error_details: str = None,
+) -> ScraperRun:
+    """Record a scraper run in the database.
+
+    Args:
+        db: Database session
+        portal: Portal name
+        projects_found: Total projects found
+        new_projects: New projects saved
+        duplicates: Duplicate projects skipped
+        filtered_old: Projects filtered because they were published before last run
+        status: Run status (success, error)
+        error_details: Error details if status is error
+
+    Returns:
+        ScraperRun object
+    """
+    run = ScraperRun(
+        portal=portal,
+        started_at=datetime.utcnow(),
+        completed_at=datetime.utcnow(),
+        status=status,
+        projects_found=projects_found,
+        new_projects=new_projects,
+        duplicates=duplicates,
+        error_details=error_details,
+    )
+    db.add(run)
+    db.commit()
+    return run
 
 
 def normalize_project(raw: RawProject) -> dict:
@@ -22,7 +84,7 @@ def normalize_project(raw: RawProject) -> dict:
     Returns:
         Dict with fields matching Project model
     """
-    return {
+    data = {
         "source": raw.source,
         "external_id": raw.external_id,
         "url": raw.url,
@@ -36,10 +98,88 @@ def normalize_project(raw: RawProject) -> dict:
         "public_sector": raw.public_sector,
         "status": "new",
         "scraped_at": raw.scraped_at or datetime.utcnow(),
+        # Publication date
+        "published_at": getattr(raw, "published_at", None),
         # PDF analysis fields
         "pdf_text": raw.pdf_text,
         "pdf_count": len(raw.pdf_urls) if raw.pdf_urls else 0,
+        # Project type
+        "project_type": getattr(raw, "project_type", "freelance"),
     }
+
+    # Add tender-specific fields if present
+    if hasattr(raw, "cpv_codes") and raw.cpv_codes:
+        data["cpv_codes"] = raw.cpv_codes
+    if hasattr(raw, "budget_min") and raw.budget_min:
+        data["budget_min"] = raw.budget_min
+    if hasattr(raw, "budget_max") and raw.budget_max:
+        data["budget_max"] = raw.budget_max
+
+    # Map deadline to tender_deadline (scrapers use "deadline", DB uses "tender_deadline")
+    tender_deadline = getattr(raw, "tender_deadline", None) or getattr(raw, "deadline", None)
+    if tender_deadline:
+        data["tender_deadline"] = tender_deadline
+
+    return data
+
+
+def filter_old_projects(
+    db: Session,
+    raw_projects: List[RawProject],
+    portal: str,
+) -> Tuple[List[RawProject], int]:
+    """Filter out projects published before the last scraper run.
+
+    Args:
+        db: Database session
+        raw_projects: List of raw projects from scraper
+        portal: Portal name for looking up last run
+
+    Returns:
+        Tuple of (filtered projects, count of filtered out)
+    """
+    if not raw_projects:
+        return [], 0
+
+    last_run = get_last_run_time(db, portal)
+
+    if not last_run:
+        # First run - keep all projects
+        logger.info("First run for %s - no date filter applied", portal)
+        return raw_projects, 0
+
+    logger.info("Last run for %s: %s", portal, last_run.strftime("%Y-%m-%d %H:%M"))
+
+    filtered = []
+    filtered_count = 0
+
+    for project in raw_projects:
+        published = getattr(project, "published_at", None)
+
+        if published is None:
+            # No publication date - keep the project (will be deduped later if exists)
+            filtered.append(project)
+        elif published > last_run:
+            # Published after last run - keep
+            filtered.append(project)
+        else:
+            # Published before last run - skip
+            filtered_count += 1
+            logger.debug(
+                "Filtered old project: %s (published %s, last run %s)",
+                project.title[:40],
+                published.strftime("%Y-%m-%d"),
+                last_run.strftime("%Y-%m-%d"),
+            )
+
+    if filtered_count > 0:
+        logger.info(
+            "Filtered %d old projects (published before %s)",
+            filtered_count,
+            last_run.strftime("%Y-%m-%d %H:%M"),
+        )
+
+    return filtered, filtered_count
 
 
 def dedupe_projects(db: Session, raw_projects: List[RawProject]) -> List[RawProject]:

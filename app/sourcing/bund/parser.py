@@ -255,6 +255,30 @@ async def parse_detail_page(page: Page, external_id: str, url: str) -> RawProjec
         except Exception:
             continue
 
+    # Extract publication date
+    published_at = None
+    published_selectors = [
+        "dt:has-text('Bekanntmachung') + dd",
+        "dt:has-text('Veröffentlichung') + dd",
+        "dt:has-text('Datum') + dd",
+        ".publication-date"
+    ]
+    for selector in published_selectors:
+        try:
+            el = await page.query_selector(selector)
+            if el:
+                pub_text = await el.inner_text()
+                date_match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", pub_text)
+                if date_match:
+                    published_at = datetime(
+                        int(date_match.group(3)),
+                        int(date_match.group(2)),
+                        int(date_match.group(1))
+                    )
+                break
+        except Exception:
+            continue
+
     # Extract skills/categories
     skills = []
     cpv_el = await page.query_selector("dt:has-text('CPV') + dd, .cpv-codes")
@@ -281,6 +305,7 @@ async def parse_detail_page(page: Page, external_id: str, url: str) -> RawProjec
         remote=remote,
         public_sector=True,  # Always public sector
         deadline=deadline,
+        published_at=published_at,
     )
 
 

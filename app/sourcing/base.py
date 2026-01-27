@@ -21,9 +21,18 @@ class RawProject:
     public_sector: bool = False
     deadline: datetime | None = None
     scraped_at: datetime = field(default_factory=datetime.utcnow)
+    # Publication date (when the project/tender was published on the portal)
+    published_at: datetime | None = None
     # PDF analysis fields
     pdf_text: str | None = None
     pdf_urls: list[str] = field(default_factory=list)
+    # Project type (freelance or tender)
+    project_type: str = "freelance"
+    # Tender-specific fields
+    cpv_codes: list[str] = field(default_factory=list)
+    budget_min: int | None = None
+    budget_max: int | None = None
+    tender_deadline: datetime | None = None
 
 
 class BaseScraper(ABC):

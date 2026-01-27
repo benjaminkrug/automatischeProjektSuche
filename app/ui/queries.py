@@ -3,15 +3,19 @@
 from datetime import date, datetime, timedelta
 from typing import List, Optional, Tuple
 
+import pandas as pd
 from sqlalchemy import func, and_
 from sqlalchemy.orm import Session
 
 from app.db.models import (
     ApplicationLog,
+    Client,
     Project,
     RejectionReason,
     ReviewQueue,
     TeamMember,
+    TenderDecision,
+    TenderLot,
 )
 from app.db.session import SessionLocal
 
@@ -130,6 +134,7 @@ def get_projects(
     status: Optional[str] = None,
     source: Optional[str] = None,
     search_text: Optional[str] = None,
+    project_type: Optional[str] = None,
     days_back: int = 30,
     limit: int = 100,
 ) -> List[Project]:
@@ -140,6 +145,7 @@ def get_projects(
         status: Filter by status (optional)
         source: Filter by source portal (optional)
         search_text: Search in title/description (optional)
+        project_type: Filter by project type (freelance/tender) (optional)
         days_back: Only show projects from last N days
         limit: Maximum number of results
 
@@ -151,6 +157,10 @@ def get_projects(
     # Date filter
     date_threshold = datetime.utcnow() - timedelta(days=days_back)
     query = query.filter(Project.scraped_at >= date_threshold)
+
+    # Project type filter
+    if project_type and project_type != "Alle":
+        query = query.filter(Project.project_type == project_type)
 
     # Status filter
     if status and status != "Alle":
@@ -503,3 +513,501 @@ def get_pending_reviews_with_score(session: Session) -> List[Tuple[ReviewQueue, 
         results.append((review, project, match_score))
 
     return results
+
+
+# ============================================================
+# Tender-specific Queries
+# ============================================================
+
+
+def get_active_tenders_count(session: Session) -> int:
+    """Get count of active tender applications.
+
+    Returns:
+        Number of tenders in applied or review status
+    """
+    return (
+        session.query(func.count(Project.id))
+        .filter(
+            Project.project_type == "tender",
+            Project.status.in_(["applied", "review"]),
+        )
+        .scalar()
+    ) or 0
+
+
+def get_high_priority_tenders(session: Session, limit: int = 5) -> List[Project]:
+    """Get high priority tenders for dashboard.
+
+    Args:
+        session: Database session
+        limit: Maximum number of results
+
+    Returns:
+        List of high-scoring tender projects
+    """
+    return (
+        session.query(Project)
+        .filter(
+            Project.project_type == "tender",
+            Project.score >= 70,
+            Project.status == "review",
+        )
+        .order_by(Project.score.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def get_tenders(
+    session: Session,
+    score_min: int = 0,
+    procedure_type: Optional[str] = None,
+    eligibility: Optional[str] = None,
+    days_until_deadline: Optional[int] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
+) -> List[Project]:
+    """Get filtered tenders.
+
+    Args:
+        session: Database session
+        score_min: Minimum score filter
+        procedure_type: Filter by procedure type
+        eligibility: Filter by eligibility status
+        days_until_deadline: Filter by maximum days until deadline
+        status: Filter by status
+        limit: Maximum number of results
+
+    Returns:
+        List of Project objects
+    """
+    query = session.query(Project).filter(Project.project_type == "tender")
+
+    if score_min > 0:
+        query = query.filter(Project.score >= score_min)
+
+    if procedure_type and procedure_type != "Alle":
+        query = query.filter(Project.procedure_type == procedure_type)
+
+    if eligibility and eligibility != "Alle":
+        query = query.filter(Project.eligibility_check == eligibility)
+
+    if days_until_deadline:
+        deadline_threshold = datetime.utcnow() + timedelta(days=days_until_deadline)
+        query = query.filter(Project.tender_deadline <= deadline_threshold)
+
+    if status and status != "Alle":
+        query = query.filter(Project.status == status)
+
+    return query.order_by(Project.score.desc()).limit(limit).all()
+
+
+def get_lots_for_project(session: Session, project_id: int) -> List[TenderLot]:
+    """Get all lots for a tender project.
+
+    Args:
+        session: Database session
+        project_id: Project ID
+
+    Returns:
+        List of TenderLot objects
+    """
+    return (
+        session.query(TenderLot)
+        .filter(TenderLot.project_id == project_id)
+        .order_by(TenderLot.lot_number)
+        .all()
+    )
+
+
+def get_tender_decision(session: Session, project_id: int) -> Optional[TenderDecision]:
+    """Get tender decision for a project.
+
+    Args:
+        session: Database session
+        project_id: Project ID
+
+    Returns:
+        TenderDecision or None
+    """
+    return (
+        session.query(TenderDecision)
+        .filter(TenderDecision.project_id == project_id)
+        .first()
+    )
+
+
+def save_tender_decision(
+    session: Session,
+    project_id: int,
+    manual_decision: str,
+    decision_reason: Optional[str] = None,
+    decision_by: Optional[str] = None,
+) -> TenderDecision:
+    """Save or update a tender decision.
+
+    Args:
+        session: Database session
+        project_id: Project ID
+        manual_decision: Decision value (apply, skip, partner_needed)
+        decision_reason: Optional reason text
+        decision_by: Optional user identifier
+
+    Returns:
+        TenderDecision instance
+    """
+    decision = (
+        session.query(TenderDecision)
+        .filter(TenderDecision.project_id == project_id)
+        .first()
+    )
+
+    if decision:
+        decision.manual_decision = manual_decision
+        decision.decision_reason = decision_reason
+        decision.decision_by = decision_by
+        decision.decision_at = datetime.utcnow()
+    else:
+        decision = TenderDecision(
+            project_id=project_id,
+            manual_decision=manual_decision,
+            decision_reason=decision_reason,
+            decision_by=decision_by,
+            decision_at=datetime.utcnow(),
+        )
+        session.add(decision)
+
+    # Update project status based on decision
+    project = session.query(Project).filter(Project.id == project_id).first()
+    if project:
+        if manual_decision == "apply":
+            project.status = "applied"
+        elif manual_decision == "skip":
+            project.status = "rejected"
+        # partner_needed and watch keep current status
+
+    session.commit()
+    return decision
+
+
+def add_to_watchlist(session: Session, project_id: int) -> bool:
+    """Add a project to the watchlist.
+
+    Args:
+        session: Database session
+        project_id: Project ID
+
+    Returns:
+        True if successful
+    """
+    project = session.query(Project).filter(Project.id == project_id).first()
+    if project:
+        project.status = "watching"
+        session.commit()
+        return True
+    return False
+
+
+def get_tender_score_distribution(session: Session, days_back: int = 30) -> dict:
+    """Get score distribution for tenders.
+
+    Args:
+        session: Database session
+        days_back: Number of days to look back
+
+    Returns:
+        Dictionary with score ranges and counts
+    """
+    date_threshold = datetime.utcnow() - timedelta(days=days_back)
+
+    scores = (
+        session.query(Project.score)
+        .filter(
+            Project.project_type == "tender",
+            Project.score.isnot(None),
+            Project.scraped_at >= date_threshold,
+        )
+        .all()
+    )
+
+    distribution = {"0-30": 0, "31-50": 0, "51-70": 0, "71-100": 0}
+
+    for (score,) in scores:
+        if score <= 30:
+            distribution["0-30"] += 1
+        elif score <= 50:
+            distribution["31-50"] += 1
+        elif score <= 70:
+            distribution["51-70"] += 1
+        else:
+            distribution["71-100"] += 1
+
+    return distribution
+
+
+def get_procedure_types(session: Session) -> List[str]:
+    """Get all unique procedure types.
+
+    Args:
+        session: Database session
+
+    Returns:
+        List of procedure type values
+    """
+    types = (
+        session.query(Project.procedure_type)
+        .filter(
+            Project.project_type == "tender",
+            Project.procedure_type.isnot(None),
+        )
+        .distinct()
+        .all()
+    )
+    return [t[0] for t in types if t[0]]
+
+
+# ============================================================
+# Client Queries
+# ============================================================
+
+
+def get_clients(
+    session: Session,
+    sector: Optional[str] = None,
+    limit: int = 100,
+) -> List[Client]:
+    """Get filtered clients.
+
+    Args:
+        session: Database session
+        sector: Filter by sector
+        limit: Maximum number of results
+
+    Returns:
+        List of Client objects
+    """
+    query = session.query(Client)
+
+    if sector and sector != "Alle":
+        query = query.filter(Client.sector == sector)
+
+    return query.order_by(Client.tenders_seen.desc()).limit(limit).all()
+
+
+def get_top_clients(session: Session, limit: int = 3) -> List[Client]:
+    """Get top clients by win rate.
+
+    Args:
+        session: Database session
+        limit: Maximum number of results
+
+    Returns:
+        List of Client objects with best win rates
+    """
+    return (
+        session.query(Client)
+        .filter(
+            Client.tenders_applied > 0,
+            Client.win_rate.isnot(None),
+        )
+        .order_by(Client.win_rate.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def get_client_for_project(session: Session, project: Project) -> Optional[Client]:
+    """Get client for a project.
+
+    Args:
+        session: Database session
+        project: Project instance
+
+    Returns:
+        Client or None
+    """
+    if not project.client_name:
+        return None
+
+    from app.sourcing.client_db import find_client
+
+    return find_client(session, project.client_name)
+
+
+def update_client(
+    session: Session,
+    client_id: int,
+    payment_rating: Optional[int] = None,
+    communication_rating: Optional[int] = None,
+    notes: Optional[str] = None,
+) -> bool:
+    """Update client information.
+
+    Args:
+        session: Database session
+        client_id: Client ID
+        payment_rating: Optional payment rating (1-5)
+        communication_rating: Optional communication rating (1-5)
+        notes: Optional notes
+
+    Returns:
+        True if successful
+    """
+    client = session.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        return False
+
+    if payment_rating is not None:
+        client.payment_rating = payment_rating
+    if communication_rating is not None:
+        client.communication_rating = communication_rating
+    if notes is not None:
+        client.notes = notes
+
+    client.updated_at = datetime.utcnow()
+    session.commit()
+    return True
+
+
+def get_client_stats(session: Session) -> dict:
+    """Get overall client statistics.
+
+    Args:
+        session: Database session
+
+    Returns:
+        Dictionary with statistics
+    """
+    total_clients = session.query(func.count(Client.id)).scalar() or 0
+
+    active_clients = (
+        session.query(func.count(Client.id))
+        .filter(Client.tenders_applied > 0)
+        .scalar()
+    ) or 0
+
+    total_seen = (
+        session.query(func.sum(Client.tenders_seen)).scalar()
+    ) or 0
+
+    total_applied = (
+        session.query(func.sum(Client.tenders_applied)).scalar()
+    ) or 0
+
+    total_won = (
+        session.query(func.sum(Client.tenders_won)).scalar()
+    ) or 0
+
+    overall_win_rate = (total_won / total_applied) if total_applied > 0 else 0
+
+    return {
+        "total_clients": total_clients,
+        "active_clients": active_clients,
+        "total_tenders_seen": total_seen,
+        "total_applications": total_applied,
+        "total_won": total_won,
+        "overall_win_rate": overall_win_rate,
+    }
+
+
+# ============================================================
+# Export Functions
+# ============================================================
+
+
+def get_tenders_as_dataframe(
+    session: Session,
+    score_min: int = 0,
+) -> pd.DataFrame:
+    """Export tenders as pandas DataFrame.
+
+    Args:
+        session: Database session
+        score_min: Minimum score filter
+
+    Returns:
+        DataFrame with tender data
+    """
+    tenders = get_tenders(session, score_min=score_min)
+
+    data = []
+    for t in tenders:
+        data.append({
+            "Titel": t.title,
+            "Auftraggeber": t.client_name,
+            "Score": t.score,
+            "Budget_Min": t.budget_min,
+            "Budget_Max": t.budget_max,
+            "Vergabeart": t.procedure_type,
+            "Eignung": t.eligibility_check,
+            "Deadline": t.tender_deadline,
+            "Status": t.status,
+            "Quelle": t.source,
+            "URL": t.url,
+        })
+
+    return pd.DataFrame(data)
+
+
+def generate_weekly_report(session: Session) -> str:
+    """Generate a weekly tender report.
+
+    Args:
+        session: Database session
+
+    Returns:
+        Markdown formatted report
+    """
+    now = datetime.utcnow()
+    week_ago = now - timedelta(days=7)
+
+    # Get statistics
+    new_tenders = (
+        session.query(func.count(Project.id))
+        .filter(
+            Project.project_type == "tender",
+            Project.scraped_at >= week_ago,
+        )
+        .scalar()
+    ) or 0
+
+    high_priority = (
+        session.query(func.count(Project.id))
+        .filter(
+            Project.project_type == "tender",
+            Project.scraped_at >= week_ago,
+            Project.score >= 70,
+        )
+        .scalar()
+    ) or 0
+
+    decisions_made = (
+        session.query(func.count(TenderDecision.id))
+        .filter(TenderDecision.decision_at >= week_ago)
+        .scalar()
+    ) or 0
+
+    # Build report
+    report = f"""# Wochenreport Ausschreibungen
+
+**Zeitraum:** {week_ago.strftime('%d.%m.%Y')} - {now.strftime('%d.%m.%Y')}
+
+## Zusammenfassung
+
+- **Neue Ausschreibungen:** {new_tenders}
+- **Hochpriorisiert (Score >= 70):** {high_priority}
+- **Entscheidungen getroffen:** {decisions_made}
+
+## Top 5 Ausschreibungen
+
+"""
+
+    top_tenders = get_high_priority_tenders(session, limit=5)
+    for i, t in enumerate(top_tenders, 1):
+        deadline_str = t.tender_deadline.strftime('%d.%m.%Y') if t.tender_deadline else '-'
+        report += f"{i}. **{t.title[:60]}**\n"
+        report += f"   - Score: {t.score} | Deadline: {deadline_str}\n"
+        report += f"   - Auftraggeber: {t.client_name or '-'}\n\n"
+
+    return report

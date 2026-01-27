@@ -80,7 +80,7 @@ from app.sourcing.upwork.scraper import UpworkScraper
 from app.sourcing.linkedin.scraper import LinkedinScraper
 from app.sourcing.simap.scraper import SimapScraper
 from app.sourcing.vergabe24.scraper import Vergabe24Scraper
-from app.sourcing.normalize import save_projects
+from app.sourcing.normalize import save_projects, filter_old_projects, record_scraper_run
 from app.sourcing.playwright.browser import browser_session
 
 logger = get_logger("orchestrator")
@@ -224,12 +224,39 @@ class DailyOrchestrator:
                 logger.info("[%s]", portal_name)
                 try:
                     projects = await scraper.scrape(max_pages=settings.scraper_max_pages)
+                    scraped_count = len(projects)
+
+                    # Filter old projects (published before last run)
+                    projects, filtered_old = filter_old_projects(self.db, projects, portal_name)
+
                     all_projects.extend(projects)
-                    self._stats.scraped += len(projects)
-                    logger.info("  Gefunden: %d Projekte", len(projects))
+                    self._stats.scraped += scraped_count
+
+                    logger.info(
+                        "  Gefunden: %d, nach Datumsfilter: %d Projekte",
+                        scraped_count,
+                        len(projects),
+                    )
+
+                    # Record successful run
+                    record_scraper_run(
+                        self.db,
+                        portal=portal_name,
+                        projects_found=scraped_count,
+                        new_projects=len(projects),
+                        filtered_old=filtered_old,
+                    )
+
                 except Exception as e:
                     logger.error("  Fehler beim Scraping von %s: %s", portal_name, e)
                     self._stats.errors += 1
+                    # Record failed run
+                    record_scraper_run(
+                        self.db,
+                        portal=portal_name,
+                        status="error",
+                        error_details=str(e),
+                    )
                     # Continue with other scrapers even if one fails
 
         logger.info("Gesamt gescraped: %d Projekte", self._stats.scraped)

@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Text, Float, Boolean, DateTime,
-    ForeignKey, UniqueConstraint, ARRAY
+    ForeignKey, UniqueConstraint, ARRAY, JSON
 )
 from sqlalchemy.orm import declarative_base, relationship
 from pgvector.sqlalchemy import Vector
@@ -31,9 +31,22 @@ class Project(Base):
     status = Column(String(50), default="new")
     scraped_at = Column(DateTime, default=datetime.utcnow)
     analyzed_at = Column(DateTime)
+    # Publication date (when the project was published on the portal)
+    published_at = Column(DateTime)
     # PDF analysis fields
     pdf_text = Column(Text)
     pdf_count = Column(Integer, default=0)
+
+    # Tender-specific fields
+    project_type = Column(String(20), default="freelance")  # "freelance" | "tender"
+    budget_min = Column(Integer)  # Parsed Budget (EUR)
+    budget_max = Column(Integer)  # Parsed Budget (EUR)
+    tender_deadline = Column(DateTime)  # Abgabefrist
+    cpv_codes = Column(ARRAY(String))  # EU-Klassifikation
+    eligibility_check = Column(String(20))  # "pass" | "fail" | "unclear"
+    eligibility_notes = Column(Text)  # Details zu Anforderungen
+    procedure_type = Column(String(50))  # Vergabeart
+    score = Column(Integer)  # Berechneter Score
 
     __table_args__ = (
         UniqueConstraint("source", "external_id", name="uq_project_source_external_id"),
@@ -151,3 +164,98 @@ class AIUsage(Base):
     output_tokens = Column(Integer, default=0)
     cost_usd = Column(Float, default=0.0)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
+
+
+# ============================================================
+# Tender Pipeline Models (Ausschreibungen)
+# ============================================================
+
+
+class TenderConfig(Base):
+    """Configuration for tender pipeline."""
+    __tablename__ = "tender_config"
+
+    id = Column(Integer, primary_key=True)
+    max_active_tenders = Column(Integer, default=3)
+    budget_min = Column(Integer, default=50000)
+    budget_max = Column(Integer, default=250000)
+    required_tech_keywords = Column(ARRAY(String))
+    excluded_keywords = Column(ARRAY(String))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TenderLot(Base):
+    """Individual lots within a tender (Lose)."""
+    __tablename__ = "tender_lots"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
+    lot_number = Column(String(50))  # "Los 1", "Lot A", etc.
+    lot_title = Column(String(500))
+    lot_description = Column(Text)
+    lot_budget = Column(Integer)
+    lot_cpv_codes = Column(ARRAY(String))
+    score = Column(Integer)
+    status = Column(String(20), default="new")  # "new", "review", "rejected"
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    project = relationship("Project", backref="tender_lots")
+
+
+class Client(Base):
+    """Vergabestellen-Historie für Lerneffekte."""
+    __tablename__ = "clients"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(500), nullable=False)  # Normalisierter Name
+    aliases = Column(ARRAY(String))  # Alternative Schreibweisen
+    sector = Column(String(50))  # "bund", "land", "kommune", "eu"
+
+    # Historie
+    tenders_seen = Column(Integer, default=0)  # Anzahl Ausschreibungen
+    tenders_applied = Column(Integer, default=0)
+    tenders_won = Column(Integer, default=0)
+    win_rate = Column(Float)
+
+    # Bewertung
+    payment_rating = Column(Integer)  # 1-5 Sterne
+    communication_rating = Column(Integer)
+    notes = Column(Text)
+
+    # Kontakte
+    known_contacts = Column(JSON)  # [{"name": "...", "email": "..."}]
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TenderDecision(Base):
+    """Speichert manuelle Entscheidungen für späteres ML-Training."""
+    __tablename__ = "tender_decisions"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
+    lot_id = Column(Integer, ForeignKey("tender_lots.id"))
+
+    # System-Score
+    auto_score = Column(Integer)
+    auto_recommendation = Column(String(20))  # "apply", "review", "reject"
+
+    # Manuelle Entscheidung
+    manual_decision = Column(String(20))  # "apply", "skip", "partner_needed"
+    decision_reason = Column(Text)  # Freitext
+    decision_by = Column(String(100))  # User
+    decision_at = Column(DateTime)
+
+    # Features für ML (später)
+    feature_vector = Column(JSON)  # Serialisierte Features
+
+    # Outcome (wenn bekannt)
+    outcome = Column(String(20))  # "won", "lost", "withdrew"
+    outcome_at = Column(DateTime)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    project = relationship("Project", backref="tender_decisions")
+    lot = relationship("TenderLot", backref="tender_decisions")

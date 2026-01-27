@@ -79,9 +79,59 @@ class Settings(BaseSettings):
         default=None, description="Optional log file path"
     )
 
+    # ============================================================
+    # Tender Pipeline Settings (Ausschreibungen)
+    # ============================================================
+    max_active_tenders: int = Field(
+        default=3, ge=1, le=20, description="Maximum concurrent tender applications"
+    )
+    tender_budget_min: int = Field(
+        default=50000, ge=0, description="Minimum tender budget (EUR)"
+    )
+    tender_budget_max: int = Field(
+        default=250000, ge=0, description="Maximum tender budget (EUR)"
+    )
+    tender_deadline_min_days: int = Field(
+        default=14, ge=1, description="Minimum days until tender deadline"
+    )
+    tender_score_threshold_reject: int = Field(
+        default=50, ge=0, le=100, description="Score below which tenders are rejected"
+    )
+    tender_score_threshold_review: int = Field(
+        default=70, ge=0, le=100, description="Score at or above which tenders go to review"
+    )
+
 
 # Singleton settings instance
 settings = Settings()
+
+
+# ============================================================
+# Tender Tech Keywords
+# ============================================================
+TENDER_TECH_KEYWORDS = [
+    "webanwendung", "webapp", "webapplikation",
+    "mobile app", "ios", "android", "flutter",
+    "react", "vue", "angular", "frontend",
+    "portal", "plattform", "digitalisierung",
+    "software-entwicklung", "softwareentwicklung",
+    "app-entwicklung", "appentwicklung",
+]
+
+# Accessibility capabilities
+ACCESSIBILITY_CAPABILITIES = {
+    "wcag_2.1_aa": True,  # Können wir liefern
+    "wcag_2.1_aaa": False,  # Zu aufwändig
+    "bitv_2.0": True,
+}
+
+# Security capabilities
+SECURITY_CAPABILITIES = {
+    "bsi_grundschutz": False,  # Nicht zertifiziert
+    "iso_27001": False,
+    "dsgvo_konform": True,  # Können wir
+    "penetrationstest": True,  # Können wir beauftragen
+}
 
 # Backwards compatibility exports
 DATABASE_URL = settings.database_url

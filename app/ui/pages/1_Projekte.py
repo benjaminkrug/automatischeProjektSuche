@@ -48,6 +48,14 @@ def main():
         # --- Filter Section ---
         st.sidebar.header("Filter")
 
+        # Project type filter
+        project_type_options = ["Alle", "freelance", "tender"]
+        selected_project_type = st.sidebar.selectbox(
+            "Projekt-Typ",
+            project_type_options,
+            format_func=lambda x: {"Alle": "Alle", "freelance": "Freelance", "tender": "Ausschreibung"}.get(x, x),
+        )
+
         # Status filter
         status_options = ["Alle"] + [
             PROJECT_STATUS_NEW,
@@ -75,6 +83,7 @@ def main():
             status=selected_status if selected_status != "Alle" else None,
             source=selected_source if selected_source != "Alle" else None,
             search_text=search_text if search_text else None,
+            project_type=selected_project_type if selected_project_type != "Alle" else None,
             days_back=days_back,
         )
 
@@ -103,16 +112,29 @@ def main():
                     rejection.reason_code, rejection.reason_code
                 )
 
-            data.append({
+            # Project type display
+            type_display = "F" if p.project_type == "freelance" else "A" if p.project_type == "tender" else "-"
+
+            row = {
                 "ID": p.id,
+                "Typ": type_display,
                 "Datum": p.scraped_at.strftime("%d.%m.%Y") if p.scraped_at else "-",
                 "Quelle": p.source,
                 "Titel": p.title[:60] + "..." if len(p.title) > 60 else p.title,
                 "Status": p.status,
-                "Rate (€/h)": f"{p.proposed_rate:.0f}" if p.proposed_rate else "-",
-                "Ablehnung": rejection_text,
                 "url": p.url,
-            })
+            }
+
+            # Add type-specific columns
+            if p.project_type == "tender":
+                row["Score"] = p.score or "-"
+                row["Deadline"] = p.tender_deadline.strftime("%d.%m.%Y") if p.tender_deadline else "-"
+            else:
+                row["Rate (€/h)"] = f"{p.proposed_rate:.0f}" if p.proposed_rate else "-"
+
+            row["Ablehnung"] = rejection_text
+
+            data.append(row)
 
         df = pd.DataFrame(data)
 
@@ -128,19 +150,39 @@ def main():
             }
             return colors.get(val, "")
 
-        # Display table with link column
-        display_cols = ["ID", "Datum", "Quelle", "Titel", "Status", "Rate (€/h)"]
+        # Build display columns based on project type filter
+        display_cols = ["ID", "Typ", "Datum", "Quelle", "Titel", "Status"]
+
+        if selected_project_type == "tender":
+            display_cols.extend(["Score", "Deadline"])
+        elif selected_project_type == "freelance":
+            display_cols.append("Rate (€/h)")
+        else:
+            # Show both when "Alle"
+            if "Score" in df.columns:
+                display_cols.append("Score")
+            if "Rate (€/h)" in df.columns:
+                display_cols.append("Rate (€/h)")
+
         if selected_status == PROJECT_STATUS_REJECTED or selected_status == "Alle":
             display_cols.append("Ablehnung")
 
+        # Filter to only existing columns
+        display_cols = [c for c in display_cols if c in df.columns]
         display_df = df[display_cols].copy()
 
+        # Fill NaN values
+        display_df = display_df.fillna("-")
+
         st.dataframe(
-            display_df.style.applymap(status_color, subset=["Status"]),
-            width="stretch",
+            display_df.style.map(status_color, subset=["Status"]),
+            use_container_width=True,
             hide_index=True,
             column_config={
+                "Typ": st.column_config.TextColumn("Typ", width="small"),
                 "Rate (€/h)": st.column_config.TextColumn("Rate (€/h)", width="small"),
+                "Score": st.column_config.TextColumn("Score", width="small"),
+                "Deadline": st.column_config.TextColumn("Deadline", width="small"),
                 "Ablehnung": st.column_config.TextColumn("Ablehnung", width="medium"),
             },
         )
@@ -191,7 +233,28 @@ def main():
                         if project.analyzed_at:
                             st.markdown(f"**Analysiert:** {project.analyzed_at.strftime('%d.%m.%Y %H:%M')}")
 
-                    # Rate info
+                    # Tender-specific info
+                    if project.project_type == "tender":
+                        st.markdown("---")
+                        st.markdown("**Ausschreibungs-Details:**")
+                        col_t1, col_t2, col_t3 = st.columns(3)
+                        with col_t1:
+                            st.markdown(f"**Score:** {project.score or '-'}")
+                        with col_t2:
+                            deadline_str = project.tender_deadline.strftime('%d.%m.%Y') if project.tender_deadline else '-'
+                            st.markdown(f"**Deadline:** {deadline_str}")
+                        with col_t3:
+                            elig_labels = {"pass": "OK", "fail": "Nicht erfüllt", "unclear": "Unklar"}
+                            elig_str = elig_labels.get(project.eligibility_check, project.eligibility_check or '-')
+                            st.markdown(f"**Eignung:** {elig_str}")
+
+                        if project.procedure_type:
+                            st.markdown(f"**Vergabeart:** {project.procedure_type}")
+
+                        if project.eligibility_notes:
+                            st.warning(f"Eignungshinweise: {project.eligibility_notes}")
+
+                    # Rate info (for freelance)
                     if project.proposed_rate:
                         st.markdown("---")
                         st.markdown(f"**Vorgeschlagene Rate:** {project.proposed_rate:.0f} €/h")
