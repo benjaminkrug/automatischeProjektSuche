@@ -1,0 +1,33 @@
+# Core
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
+pgvector>=0.2
+
+# Settings and validation
+pydantic>=2.0
+pydantic-settings>=2.0
+
+# Environment
+python-dotenv>=1.0
+
+# Web scraping
+playwright>=1.40
+
+# RSS parsing
+feedparser>=6.0
+
+# HTTP client (for API-based scrapers)
+httpx>=0.25
+
+# AI/LLM
+crewai>=0.1
+openai>=1.0
+
+# Retry logic
+tenacity>=8.0
+
+# Document generation
+python-docx>=1.0
+
+# Web UI
+streamlit>=1.30
