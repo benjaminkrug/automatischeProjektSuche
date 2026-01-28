@@ -106,6 +106,11 @@ WEBAPP_PATTERNS = [
     r"online[- ]?(portal|plattform|anwendung)",
     r"single[- ]page[- ]application",
     r"progressive[- ]web[- ]app",
+    # Webseiten-Erkennung (klassische Websites, nicht nur Web-Apps)
+    r"(erstellung|entwicklung|programmierung|relaunch|neugestaltung)\s+(einer?\s+)?(web(site|seite)|homepage|internetseite)",
+    r"(web(site|seite)|homepage|internetseite|internetauftritt)\s+(erstellen|entwickeln|programmieren|neugestalten|relaunchen)",
+    r"landingpage",
+    r"(web(site|seite)|homepage)[- ]?(design|entwicklung|erstellung|relaunch)",
 ]
 
 # Mobile App-Indikatoren (explizite Forderung)

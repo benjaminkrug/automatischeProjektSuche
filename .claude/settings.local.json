@@ -43,7 +43,9 @@
       "Bash(venvScriptspython -c \"from app.db.session import SessionLocal; s = SessionLocal\\(\\); print\\(''DB Connection OK''\\); s.close\\(\\)\")",
       "Bash(streamlit run:*)",
       "Bash(ping:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "WebFetch(domain:www.freelancermap.de)",
+      "Bash(PYTHONPATH=\"C:\\\\Users\\\\krugb\\\\OneDrive\\\\Desktop\\\\GMBH\\\\Projekte\\\\gruppenprojekte\\\\private-projekte\\\\automatischeProjektSuche\" python:*)"
     ]
   }
 }

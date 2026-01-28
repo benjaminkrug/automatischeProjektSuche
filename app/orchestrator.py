@@ -68,7 +68,6 @@ from app.services.client_research_service import get_client_research_sync, Clien
 from app.settings import settings
 from app.sourcing.bund.scraper import BundScraper
 from app.sourcing.bund_rss.scraper import BundRssScraper
-from app.sourcing.dtvp.scraper import DtvpScraper
 from app.sourcing.evergabe.scraper import EvergabeScraper
 from app.sourcing.evergabe_online.scraper import EvergabeOnlineScraper
 from app.sourcing.freelancermap.scraper import FreelancermapScraper
@@ -199,7 +198,6 @@ class DailyOrchestrator:
             # Public sector - high priority
             ("bund.de", BundScraper()),
             ("bund_rss", BundRssScraper()),
-            ("dtvp", DtvpScraper()),
             ("evergabe", EvergabeScraper()),
             ("evergabe_online", EvergabeOnlineScraper()),
             ("simap.ch", SimapScraper()),

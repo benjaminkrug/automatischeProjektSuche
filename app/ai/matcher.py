@@ -242,7 +242,7 @@ AUSSCHREIBUNGSUNTERLAGEN (PDF)
 
 KEYWORD-ANALYSE (vorberechnet)
 ==============================
-Keyword-Score: {keyword_result.total_score}/70 Punkte
+Keyword-Score: {keyword_result.total_score}/40 Punkte
 Tier-1 Keywords (Kernkompetenz): {tier_1_kw}
 Tier-2 Keywords (starke Passung): {tier_2_kw}
 Combo-Bonus: +{keyword_result.combo_bonus} Punkte
@@ -276,13 +276,13 @@ Aktive Bewerbungen: {active_applications}/{settings.max_active_applications}
 
 BEWERTUNGSKRITERIEN (Gewichtung beachten)
 =========================================
-- Keyword-Score (vorberechnet): 70%
-  (Falls KEYWORD-ANALYSE oben vorhanden: ÜBERNIMM den Wert direkt für skill_match!)
-  (Falls keine KEYWORD-ANALYSE: bewerte Skills manuell 0-70)
-- Erfahrung & Seniorität: 12%
-  (Jahre Erfahrung, Projektrelevanz, Branchenkenntnisse)
-- Embedding-Score (Profil-Projekt-Ähnlichkeit): 8%
+- Embedding-Score (Profil-Projekt-Ähnlichkeit): 40%
   (Der vorberechnete Ähnlichkeitswert - höher ist besser)
+- Keyword-Score (vorberechnet): 40%
+  (Falls KEYWORD-ANALYSE oben vorhanden: ÜBERNIMM den Wert direkt für skill_match!)
+  (Falls keine KEYWORD-ANALYSE: bewerte Skills manuell 0-40)
+- Erfahrung & Seniorität: 10%
+  (Jahre Erfahrung, Projektrelevanz, Branchenkenntnisse)
 - Markt-Fit (Budget, Timing): 5%
   (Passt das Budget zum Stundensatz? Ist der Zeitrahmen realistisch?)
 - Risikofaktoren (Red Flags, Kapazität): 5%
@@ -297,9 +297,9 @@ ENTSCHEIDUNGSSCHWELLEN
 Antworte im JSON-Format mit folgenden Feldern:
 - score: Zahl 0-100 (Erfolgswahrscheinlichkeit)
 - score_breakdown: Objekt mit Aufschlüsselung:
-  - skill_match: Keyword-Score oder manuelle Bewertung (0-70)
-  - experience: Punkte für Erfahrung/Seniorität (0-12)
-  - embedding: Punkte aus Embedding-Score (0-8)
+  - embedding: Punkte aus Embedding-Score (0-40)
+  - skill_match: Keyword-Score oder manuelle Bewertung (0-40)
+  - experience: Punkte für Erfahrung/Seniorität (0-10)
   - market_fit: Punkte für Markt-Fit (0-5)
   - risk_factors: Punkte für Risikobewertung (0-5)
 - best_candidate_name: Name des besten Kandidaten
@@ -313,18 +313,37 @@ Antworte im JSON-Format mit folgenden Feldern:
 Antworte NUR mit dem JSON-Objekt, ohne zusätzlichen Text."""
 
 
-def _clamp_score_breakdown(data: dict) -> dict:
-    """Clamp score_breakdown values to valid ranges before Pydantic validation.
+def _sanitize_llm_response(data: dict) -> dict:
+    """Sanitize LLM response: handle null values, clamp scores.
 
-    This prevents LLM outputs with out-of-range values from causing validation errors.
+    This prevents LLM outputs with null values or out-of-range values from
+    causing Pydantic validation errors.
     """
+    # Handle required string fields
+    if data.get("best_candidate_name") is None:
+        data["best_candidate_name"] = "Unbekannt"
+        data["decision"] = "review"  # Force review when candidate unknown
+        logger.warning("LLM returned null for best_candidate_name, defaulting to 'Unbekannt'")
+
+    if data.get("rate_reasoning") is None:
+        data["rate_reasoning"] = "Keine Begründung vom LLM erhalten"
+        logger.warning("LLM returned null for rate_reasoning, using default")
+
+    # Handle required numeric field
+    if data.get("proposed_rate") is None or data.get("proposed_rate", 0) <= 0:
+        data["proposed_rate"] = 75.0  # Fallback Stundensatz
+        logger.warning(
+            "LLM returned invalid proposed_rate, defaulting to fallback: 75.0"
+        )
+
+    # Clamp score_breakdown values to valid ranges
     if "score_breakdown" in data and isinstance(data["score_breakdown"], dict):
         breakdown = data["score_breakdown"]
         # Define max values for each component
         max_values = {
-            "skill_match": 70,
-            "experience": 12,
-            "embedding": 8,
+            "skill_match": 40,
+            "experience": 10,
+            "embedding": 40,
             "market_fit": 5,
             "risk_factors": 5,
         }
@@ -372,7 +391,7 @@ def _call_llm_structured(prompt: str) -> tuple[MatchOutput, int, int]:
     try:
         data = json.loads(raw_content)
         # Clamp score_breakdown values to valid ranges
-        data = _clamp_score_breakdown(data)
+        data = _sanitize_llm_response(data)
         return MatchOutput(**data), input_tokens, output_tokens
     except json.JSONDecodeError as e:
         raise ParsingError(
@@ -388,6 +407,16 @@ def _call_llm_structured(prompt: str) -> tuple[MatchOutput, int, int]:
         ) from e
 
 
+def _calculate_embedding_points(embedding_score: float) -> int:
+    """Calculate embedding points from similarity score.
+
+    Scaling: 0.5 similarity = 100% (40 points), 0.25 = 50% (20 points), linear.
+    """
+    # Linear scaling: embedding_score / 0.5 * 40 = embedding_score * 80
+    points = int(embedding_score * 80)
+    return min(40, max(0, points))
+
+
 def _apply_business_rules(
     match_output: MatchOutput,
     candidates: List[CandidateProfile],
@@ -399,15 +428,31 @@ def _apply_business_rules(
 
     If keyword_result is provided, the skill_match component is replaced with
     the pre-calculated keyword score for consistency.
+    Embedding score is always calculated deterministically from the best candidate's
+    embedding_score (0.5 = 40 points, 0.25 = 20 points, linear scaling).
     """
+    # Find best candidate by name first (needed for embedding calculation)
+    best_candidate = candidates[0]  # Default to first
+    for c in candidates:
+        if c.name.lower() == match_output.best_candidate_name.lower():
+            best_candidate = c
+            break
+
+    # Calculate embedding points deterministically
+    embedding_points = _calculate_embedding_points(best_candidate.embedding_score)
+    logger.debug(
+        "Embedding score %.3f -> %d points (candidate: %s)",
+        best_candidate.embedding_score, embedding_points, best_candidate.name
+    )
+
     # Build adjusted score breakdown if keyword_result available
     score_breakdown = match_output.score_breakdown
     if keyword_result and score_breakdown:
-        # Override skill_match with keyword score
+        # Override skill_match with keyword score and embedding with calculated value
         adjusted_breakdown = ScoreBreakdown(
             skill_match=keyword_result.total_score,
             experience=score_breakdown.experience,
-            embedding=score_breakdown.embedding,
+            embedding=embedding_points,
             market_fit=score_breakdown.market_fit,
             risk_factors=score_breakdown.risk_factors,
         )
@@ -417,7 +462,7 @@ def _apply_business_rules(
         score = (
             keyword_result.total_score +
             score_breakdown.experience +
-            score_breakdown.embedding +
+            embedding_points +
             score_breakdown.market_fit +
             score_breakdown.risk_factors
         )
@@ -426,12 +471,30 @@ def _apply_business_rules(
             score,
             keyword_result.total_score,
             score_breakdown.experience,
-            score_breakdown.embedding,
+            embedding_points,
             score_breakdown.market_fit,
             score_breakdown.risk_factors,
         )
     else:
-        score = match_output.score
+        # Override embedding with calculated value even without keyword_result
+        if score_breakdown:
+            adjusted_breakdown = ScoreBreakdown(
+                skill_match=score_breakdown.skill_match,
+                experience=score_breakdown.experience,
+                embedding=embedding_points,
+                market_fit=score_breakdown.market_fit,
+                risk_factors=score_breakdown.risk_factors,
+            )
+            score_breakdown = adjusted_breakdown
+            score = (
+                score_breakdown.skill_match +
+                score_breakdown.experience +
+                embedding_points +
+                score_breakdown.market_fit +
+                score_breakdown.risk_factors
+            )
+        else:
+            score = match_output.score
 
         # Legacy keyword bonus (for backwards compatibility)
         if keyword_score_modifier > 0:
@@ -450,13 +513,6 @@ def _apply_business_rules(
         decision = "review"
     else:
         decision = "reject"
-
-    # Find best candidate by name
-    best_candidate = candidates[0]  # Default to first
-    for c in candidates:
-        if c.name.lower() == match_output.best_candidate_name.lower():
-            best_candidate = c
-            break
 
     # Ensure proposed rate is above minimum
     proposed_rate = match_output.proposed_rate

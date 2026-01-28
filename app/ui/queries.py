@@ -154,8 +154,9 @@ def get_projects(
     """
     query = session.query(Project)
 
-    # Date filter
-    date_threshold = datetime.utcnow() - timedelta(days=days_back)
+    # Date filter - use day start for consistent comparison
+    today_start = datetime.combine(date.today(), datetime.min.time())
+    date_threshold = today_start - timedelta(days=days_back)
     query = query.filter(Project.scraped_at >= date_threshold)
 
     # Project type filter

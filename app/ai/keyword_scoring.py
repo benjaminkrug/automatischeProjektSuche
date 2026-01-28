@@ -1,12 +1,12 @@
 """Erweitertes Keyword-Scoring mit Kategorien, Gewichtung und Kombinationen.
 
-Dieses Modul implementiert ein tiered Keyword-Scoring-System (70% des Gesamt-Scores):
-- Tier 1: Kernkompetenzen (16 Punkte pro Keyword, max 48)
-- Tier 2: Starke Passung (10 Punkte pro Keyword, max 20)
-- Tier 3: Nice-to-have (4 Punkte pro Keyword, max 8)
-- Combo-Bonus: Wertvolle Kombinationen (+4 bis +10, max 20)
+Dieses Modul implementiert ein tiered Keyword-Scoring-System (40% des Gesamt-Scores):
+- Tier 1: Kernkompetenzen (20 Punkte pro Keyword, max 32)
+- Tier 2: Starke Passung (12 Punkte pro Keyword, max 17)
+- Tier 3: Nice-to-have (6 Punkte pro Keyword, max 12)
+- Combo-Bonus: Wertvolle Kombinationen (+2 bis +6, max 11)
 - Reject: Gewichtete Ausschluss-Keywords
-- Gesamt-Maximum: 70 Punkte
+- Gesamt-Maximum: 40 Punkte
 
 Ersetzt/erweitert das einfache Keyword-Filtering in keyword_filter.py
 mit einem detaillierten Score-Breakdown für die Matching-Entscheidung.
@@ -206,75 +206,93 @@ TIER_3_KEYWORDS: Set[str] = {
     "openapi",
 }
 
-# Punktwerte pro Tier (verdoppelt für 70% Gewichtung)
+# Punktwerte pro Tier (skaliert für 40% Gewichtung)
 TIER_POINTS: Dict[KeywordTier, int] = {
-    KeywordTier.TIER_1: 16,
-    KeywordTier.TIER_2: 10,
-    KeywordTier.TIER_3: 4,
+    KeywordTier.TIER_1: 20,  # Kernkompetenz
+    KeywordTier.TIER_2: 12,  # Gute Passung
+    KeywordTier.TIER_3: 6,   # Nice-to-have
 }
 
 # Maximale Punkte pro Tier (Deckelung)
 TIER_MAX_POINTS: Dict[KeywordTier, int] = {
-    KeywordTier.TIER_1: 48,  # Max 3 Tier-1 Keywords zählen (16 Punkte)
-    KeywordTier.TIER_2: 20,  # Max 2 Tier-2 Keywords zählen (10 Punkte)
-    KeywordTier.TIER_3: 8,   # Max 2 Tier-3 Keywords zählen (4 Punkte)
+    KeywordTier.TIER_1: 32,  # Max ~1.6 Tier-1 Keywords zählen voll
+    KeywordTier.TIER_2: 17,  # Max ~1.4 Tier-2 Keywords zählen voll
+    KeywordTier.TIER_3: 12,  # Max 2 Tier-3 Keywords zählen
 }
 
 # GESAMT-MAXIMUM für Keyword-Score
-KEYWORD_SCORE_MAX = 70  # Entspricht 70% des Gesamt-Scores
+KEYWORD_SCORE_MAX = 40  # Entspricht 40% des Gesamt-Scores
 
-# Wertvolle Kombinationen -> Extra-Bonus (verdoppelt für 70% Gewichtung)
+# Wertvolle Kombinationen -> Extra-Bonus (skaliert für 40% Gewichtung)
 COMBO_BONUSES: Dict[FrozenSet[str], int] = {
     # Frontend + Backend = Fullstack-Projekt
-    frozenset({"vue", "python"}): 10,
-    frozenset({"vue", "django"}): 10,
-    frozenset({"vue", "fastapi"}): 10,
-    frozenset({"vuejs", "python"}): 10,
-    frozenset({"nuxt", "python"}): 10,
-    frozenset({"react", "python"}): 8,
-    frozenset({"react", "node"}): 8,
-    frozenset({"react", "nodejs"}): 8,
-    frozenset({"angular", "python"}): 8,
+    frozenset({"vue", "python"}): 6,
+    frozenset({"vue", "django"}): 6,
+    frozenset({"vue", "fastapi"}): 6,
+    frozenset({"vue", "c#"}): 8,
+    frozenset({"vue", "dotnet"}): 8,
+    frozenset({"vue", "asp.net"}): 8,
+    frozenset({"vue", ".net"}): 8,
+    frozenset({"vue", "sql"}): 8,
+    frozenset({"vue", "postgresql"}): 8,
+    frozenset({"vuejs", "python"}): 8,
+    frozenset({"vuejs", ".net"}): 8,
+    frozenset({"vuejs", "asp.net"}): 8,
+    frozenset({"vuejs", "dotnet"}): 8,
+    frozenset({"vuejs", "c#"}): 8,
+    frozenset({"vuejs", "sql"}): 8,
+    frozenset({"vuejs", "postgresql"}): 8,
+    frozenset({"angular", "python"}): 6,
+    frozenset({"angular", "django"}): 6,
+    frozenset({"angular", "fastapi"}): 6,
+    frozenset({"angular", "c#"}): 8,
+    frozenset({"angular", ".net"}): 8,
+    frozenset({"angular", "dotnet"}): 8,
+    frozenset({"angular", "asp.net"}): 8,
+    frozenset({"angular", "postgresql"}): 8,
+    frozenset({"nuxt", "python"}): 6,
+    frozenset({"react", "python"}): 5,
+    frozenset({"react", "node"}): 5,
+    frozenset({"react", "nodejs"}): 5,
     # Frontend + DB = Vollständiges Projekt
-    frozenset({"vue", "postgresql"}): 6,
-    frozenset({"react", "postgresql"}): 6,
-    frozenset({"vue", "mongodb"}): 6,
+    frozenset({"react", "postgresql"}): 4,
+    frozenset({"vue", "mongodb"}): 4,
     # API + Frontend = Moderne Architektur
-    frozenset({"api", "vue"}): 6,
-    frozenset({"graphql", "vue"}): 8,
-    frozenset({"graphql", "react"}): 8,
-    frozenset({"rest", "vue"}): 4,
+    frozenset({"api", "vue"}): 4,
+    frozenset({"graphql", "vue"}): 5,
+    frozenset({"graphql", "react"}): 5,
+    frozenset({"rest", "vue"}): 2,
     # Cloud + Backend = DevOps-Readiness
-    frozenset({"docker", "python"}): 4,
-    frozenset({"kubernetes", "python"}): 6,
-    frozenset({"aws", "python"}): 4,
-    frozenset({"docker", "django"}): 6,
+    frozenset({"docker", "python"}): 2,
+    frozenset({"kubernetes", "python"}): 4,
+    frozenset({"aws", "python"}): 2,
+    frozenset({"docker", "django"}): 4,
     # Fullstack combinations
-    frozenset({"fullstack", "vue"}): 6,
-    frozenset({"fullstack", "python"}): 6,
+    frozenset({"fullstack", "vue"}): 4,
+    frozenset({"fullstack", "python"}): 4,
     # .NET Kombinationen
-    frozenset({"c#", "asp.net"}): 10,
-    frozenset({"c#", "blazor"}): 10,
-    frozenset({".net", "entity framework"}): 8,
-    frozenset({"c#", "postgresql"}): 6,
-    frozenset({"c#", "ms sql"}): 6,
-    frozenset({"c#", "docker"}): 4,
+    frozenset({"c#", "asp.net"}): 6,
+    frozenset({"c#", "blazor"}): 6,
+    frozenset({".net", "entity framework"}): 5,
+    frozenset({"c#", "postgresql"}): 4,
+    frozenset({"c#", "ms sql"}): 4,
+    frozenset({"c#", "docker"}): 2,
     # Java Kombinationen
-    frozenset({"java", "spring"}): 10,
-    frozenset({"java", "spring boot"}): 10,
-    frozenset({"kotlin", "spring"}): 8,
-    frozenset({"java", "postgresql"}): 6,
-    frozenset({"java", "docker"}): 4,
+    frozenset({"java", "spring"}): 6,
+    frozenset({"java", "spring boot"}): 6,
+    frozenset({"kotlin", "spring"}): 5,
+    frozenset({"java", "postgresql"}): 4,
+    frozenset({"java", "docker"}): 2,
     # Frontend Kombinationen
-    frozenset({"vue", "tailwind"}): 6,
-    frozenset({"react", "tailwind"}): 6,
-    frozenset({"vue", "typescript"}): 8,
-    frozenset({"react", "typescript"}): 8,
-    frozenset({"next.js", "react"}): 8,
+    frozenset({"vue", "tailwind"}): 4,
+    frozenset({"react", "tailwind"}): 4,
+    frozenset({"vue", "typescript"}): 5,
+    frozenset({"react", "typescript"}): 5,
+    frozenset({"next.js", "react"}): 5,
 }
 
 # Maximum combo bonus
-COMBO_BONUS_MAX = 20
+COMBO_BONUS_MAX = 11
 
 # Reject-Keywords mit Schweregrad (gewichtet)
 REJECT_KEYWORDS_WEIGHTED: Dict[str, int] = {

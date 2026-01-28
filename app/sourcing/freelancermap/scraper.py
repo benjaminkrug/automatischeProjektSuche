@@ -64,9 +64,10 @@ class FreelancermapScraper(BaseScraper):
             # Handle cookie consent if present
             await self._handle_cookie_consent(page)
 
-            # Scrape multiple pages - only collect search results, skip detail pages
+            # First, collect all search results from all pages
+            all_results = []
             for page_num in range(1, max_pages + 1):
-                logger.debug("Scraping page %d...", page_num)
+                logger.debug("Scraping search page %d...", page_num)
 
                 # Parse search results
                 results = await parse_search_results(page)
@@ -76,21 +77,13 @@ class FreelancermapScraper(BaseScraper):
 
                 logger.debug("Found %d projects on page %d", len(results), page_num)
 
-                # Create RawProject from search results (without fetching detail pages)
+                # Filter and collect results
                 for result in results:
-                    # Early filter - skip obviously unsuitable projects
-                    if should_skip_project(result["title"], result.get("description", "")):
+                    # Early filter on title only (description not available yet)
+                    if should_skip_project(result["title"], ""):
                         logger.debug("Skipping (early filter): %s", result["title"][:50])
                         continue
-
-                    project = RawProject(
-                        source="freelancermap",
-                        external_id=result["external_id"],
-                        url=result["url"],
-                        title=result["title"],
-                        public_sector=False,
-                    )
-                    projects.append(project)
+                    all_results.append(result)
 
                 # Navigate to next page
                 if page_num < max_pages:
@@ -98,6 +91,28 @@ class FreelancermapScraper(BaseScraper):
                     if not has_next:
                         break
                     await asyncio.sleep(1)  # Brief pause between pages
+
+            logger.debug("Collected %d projects from search, fetching details...", len(all_results))
+
+            # Now fetch detail pages for all collected results
+            for result in all_results:
+                # Fetch detail page for description, skills, etc.
+                project = await self._get_project_details(
+                    page,
+                    result["external_id"],
+                    result["url"],
+                    result["title"],
+                )
+
+                if project:
+                    # Apply early filter again with full description
+                    if should_skip_project(project.title, project.description or ""):
+                        logger.debug("Skipping (early filter after details): %s", project.title[:50])
+                        continue
+                    projects.append(project)
+
+                # Brief pause between detail page requests to avoid rate limiting
+                await asyncio.sleep(0.5)
 
         logger.info("Total scraped: %d projects", len(projects))
         return projects
