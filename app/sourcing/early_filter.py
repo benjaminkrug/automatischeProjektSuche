@@ -69,11 +69,29 @@ EARLY_REJECT_INDUSTRY_KEYWORDS: List[str] = [
     "labordiagnostik", "medizinprodukte", "pflegedienstleistung",
 ]
 
-# Keywords that are acceptable in context (don't reject if also has these)
+# Q4: Keywords that are acceptable in context (don't reject if also has these)
+# Extended list to reduce false negatives
 CONTEXT_ALLOW_KEYWORDS: List[str] = [
-    "fullstack", "full-stack", "webentwicklung", "webanwendung",
-    "python", "javascript", "typescript", "vue", "react",
-    "backend", "frontend", "api",
+    # Rollen
+    "fullstack", "full-stack", "backend", "frontend", "api",
+    "webentwicklung", "softwareentwicklung", "it-beratung",
+    "entwickler", "developer", "engineer",
+    # Technologien
+    "python", "java", "javascript", "typescript", "vue", "react", "angular",
+    "c#", ".net", "django", "spring", "node", "nodejs",
+    "fastapi", "flask", "express", "nestjs",
+    # Projekttypen
+    "webanwendung", "webapp", "portal", "plattform", "saas",
+    "digitalisierung", "e-government", "ozg",
+    "webapplikation", "webportal", "online-plattform",
+    # Allgemein IT
+    "it-projekt", "it-system", "fachverfahren", "fachanwendung",
+    "schnittstelle", "datenbank", "cloud", "microservice", "microservices",
+    "docker", "kubernetes", "aws", "azure",
+    # API/Integration
+    "rest", "graphql", "restful", "api-entwicklung",
+    # Datenbank
+    "postgresql", "mongodb", "mysql", "redis",
 ]
 
 

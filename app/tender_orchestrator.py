@@ -47,7 +47,9 @@ from app.sourcing.tender_filter import (
     TenderScore,
     detect_procedure_type,
     check_eligibility,
+    extract_budget_from_text,
 )
+from app.sourcing.pdf_analyzer import TenderPdfAnalyzer
 from app.sourcing.client_db import (
     get_or_create_client,
     get_client_for_project,
@@ -55,6 +57,8 @@ from app.sourcing.client_db import (
 )
 from app.sourcing.normalize import save_projects, filter_old_projects, record_scraper_run
 from app.sourcing.playwright.browser import browser_session
+from app.sourcing.base import extract_cpv_codes
+from app.notifications.email import send_tender_notification
 
 logger = get_logger("tender_orchestrator")
 
@@ -131,6 +135,7 @@ class TenderOrchestrator:
         """Initialize orchestrator."""
         self._db: Optional[Session] = None
         self._stats = TenderPipelineStats()
+        self._high_priority_tenders: List[dict] = []
 
     @property
     def db(self) -> Session:
@@ -175,6 +180,10 @@ class TenderOrchestrator:
             # 5-11. Process each new project
             for project in new_projects:
                 self._process_tender(project)
+
+            # Send email notification for high-priority tenders
+            if self._high_priority_tenders:
+                send_tender_notification(self._high_priority_tenders)
 
             # Log summary
             self._stats.log_summary()
@@ -352,8 +361,19 @@ class TenderOrchestrator:
             # Mark as tender
             project.project_type = "tender"
 
+            # Extract CPV codes from text if not already populated
+            if not project.cpv_codes:
+                combined_text = f"{project.title or ''} {project.description or ''} {project.pdf_text or ''}"
+                extracted_cpv = extract_cpv_codes(combined_text)
+                if extracted_cpv:
+                    project.cpv_codes = extracted_cpv
+                    logger.info("  CPV-Codes extrahiert: %s", ", ".join(extracted_cpv[:5]))
+
             # Get or create client
             client, client_data = self._process_client(project)
+
+            # Analyze PDFs if available
+            self._analyze_pdfs(project)
 
             # Extract lots if applicable
             lots = self._extract_lots(project)
@@ -373,6 +393,48 @@ class TenderOrchestrator:
             self._stats.errors += 1
             project.status = "error"
             self.db.commit()
+
+    def _analyze_pdfs(self, project: Project) -> None:
+        """Analyze PDF documents attached to the project."""
+        pdf_urls = getattr(project, "pdf_urls", None)
+        if not pdf_urls and not project.pdf_text:
+            return
+
+        # If we already have pdf_text from scraping, try to extract budget
+        if project.pdf_text and not project.budget_max:
+            budget = extract_budget_from_text(project.pdf_text)
+            if budget:
+                project.budget_max = budget
+                logger.info("  Budget aus PDF extrahiert: %s€", f"{budget:,}")
+
+        # If we have local PDF files, run full analysis
+        pdf_paths = getattr(project, "_pdf_local_paths", None)
+        if not pdf_paths:
+            return
+
+        try:
+            analyzer = TenderPdfAnalyzer()
+            result = analyzer.analyze(pdf_paths)
+
+            if result.extracted_text_length > 0:
+                logger.info(
+                    "  PDF-Analyse: %d Seiten, %d Zeichen",
+                    result.total_pages,
+                    result.extracted_text_length,
+                )
+
+                # Extract budget from PDF if not already set
+                if not project.budget_max and result.budget_details:
+                    for key in ["total_volume", "estimated_value", "max_value", "budget"]:
+                        if key in result.budget_details:
+                            budget = extract_budget_from_text(result.budget_details[key])
+                            if budget:
+                                project.budget_max = budget
+                                logger.info("  Budget aus PDF: %s€", f"{budget:,}")
+                                break
+
+        except Exception as e:
+            logger.warning("  PDF-Analyse fehlgeschlagen: %s", e)
 
     def _process_client(self, project: Project) -> tuple:
         """Process client information for a tender."""
@@ -583,6 +645,15 @@ class TenderOrchestrator:
 
         if score_result.normalized >= settings.tender_score_threshold_review:
             self._stats.high_priority += 1
+            # Collect for email notification
+            self._high_priority_tenders.append({
+                "title": project.title,
+                "score": score_result.normalized,
+                "source": project.source,
+                "url": project.url,
+                "client_name": project.client_name or "-",
+                "deadline": project.tender_deadline.strftime("%d.%m.%Y") if project.tender_deadline else "-",
+            })
         self._stats.review_queue += 1
 
     def _reject_tender(self, project: Project, score_result: TenderScore) -> None:

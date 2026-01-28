@@ -32,25 +32,36 @@ def render_score_breakdown(session, project):
     fv = decision.feature_vector
 
     breakdown = [
-        ("Tech-Fit", fv.get("tech_score", 0), 40),
+        ("Tech-Fit", fv.get("tech_score", 0), 50),
         ("Volumen", fv.get("volume_score", 0), 15),
         ("Vergabeart", fv.get("procedure_score", 0), 15),
         ("Zuschlag", fv.get("award_criteria_score", 0), 10),
         ("Eignung", fv.get("eligibility_score", 0), 15),
+        ("Barrierefrei", fv.get("accessibility_score", 0), 5),
+        ("Sicherheit", fv.get("security_score", 0), 0),
+        ("Konsortium", fv.get("consortium_score", 0), 10),
+        ("Auftraggeber", fv.get("client_score", 0), 15),
         ("Deadline", fv.get("deadline_score", 0), 10),
     ]
 
     for name, score, max_score in breakdown:
-        pct = score / max_score if max_score > 0 else 0
-        bar = "|" * int(pct * 10) + "-" * (10 - int(pct * 10))
-        st.text(f"{name:12} {score:3}/{max_score:2}  [{bar}]")
+        if max_score > 0:
+            pct = score / max_score
+            bar = "|" * int(pct * 10) + "-" * (10 - int(pct * 10))
+            st.text(f"{name:12} {score:3}/{max_score:2}  [{bar}]")
+        elif score != 0:
+            st.text(f"{name:12} {score:3}     [BLOCKER]")
 
 
 def deadline_badge(tender) -> str:
-    """Generate deadline badge text."""
+    """Generate deadline badge text with urgency indicator."""
     if not tender.tender_deadline:
         return "-"
     days_left = (tender.tender_deadline - datetime.now()).days
+    if days_left < 7:
+        return f"!!{days_left}d"
+    if days_left < 14:
+        return f"!{days_left}d"
     return f"{days_left}d"
 
 
@@ -61,6 +72,7 @@ def main():
         # --- Sidebar Filter ---
         st.sidebar.header("Filter")
 
+        search_query = st.sidebar.text_input("Volltextsuche", placeholder="z.B. React, Portal...")
         score_min = st.sidebar.slider("Min. Score", 0, 100, 50)
 
         # Procedure type filter
@@ -77,6 +89,11 @@ def main():
 
         # Deadline filter
         deadline_days = st.sidebar.slider("Max. Tage bis Deadline", 7, 60, 30)
+
+        # Sort order
+        sort_options = {"Score (absteigend)": "score", "Deadline (dringend zuerst)": "deadline"}
+        sort_label = st.sidebar.selectbox("Sortierung", list(sort_options.keys()))
+        sort_by = sort_options[sort_label]
 
         # Status filter
         status_options = ["Alle", "review", "applied", "rejected", "watching"]
@@ -148,6 +165,8 @@ def main():
             eligibility=eligibility if eligibility != "Alle" else None,
             days_until_deadline=deadline_days,
             status=selected_status if selected_status != "Alle" else None,
+            search_query=search_query if search_query else None,
+            sort_by=sort_by,
         )
 
         if not tenders:

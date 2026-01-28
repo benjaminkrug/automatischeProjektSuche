@@ -60,6 +60,41 @@ FIT_SCORE_MALUS_EXCLUSION_MEDIUM = 15  # -15 bei mittlerem Ausschluss-Risiko
 FIT_SCORE_BONUS_WEBAPP = 5  # +5 für Webapp/App-Projekte
 
 
+def _should_auto_decide(
+    keyword_result: Optional[KeywordScoreResult],
+    total_score: int,
+) -> bool:
+    """Prüfe ob Auto-Decision möglich oder Review nötig wegen Confidence.
+
+    Bei niedriger Confidence oder Grenzwert-Scores mit mittlerer Confidence
+    sollte das Projekt zur manuellen Review weitergeleitet werden.
+
+    Args:
+        keyword_result: Ergebnis der Keyword-Analyse (optional)
+        total_score: Berechneter Gesamt-Score
+
+    Returns:
+        True wenn Auto-Decision OK, False wenn Review nötig
+    """
+    if keyword_result is None:
+        # Ohne Keyword-Result keine Confidence-basierte Entscheidung möglich
+        return True
+
+    # Bei niedriger Confidence -> immer Review
+    if keyword_result.confidence == "low":
+        return False
+
+    # Bei Grenzwert-Scores (60-74) und medium confidence -> Review
+    if (
+        settings.match_threshold_reject <= total_score < settings.match_threshold_apply
+        and keyword_result.confidence == "medium"
+    ):
+        return False
+
+    # Klare Fälle: Auto-Decision OK
+    return True
+
+
 def match_project(
     project_title: str,
     project_description: str,
@@ -410,10 +445,10 @@ def _call_llm_structured(prompt: str) -> tuple[MatchOutput, int, int]:
 def _calculate_embedding_points(embedding_score: float) -> int:
     """Calculate embedding points from similarity score.
 
-    Scaling: 0.5 similarity = 100% (40 points), 0.25 = 50% (20 points), linear.
+    Scaling: 0.6 similarity = 100% (60 points), 0.25 = 50% (30 points), linear.
     """
-    # Linear scaling: embedding_score / 0.5 * 40 = embedding_score * 80
-    points = int(embedding_score * 80)
+    # Linear scaling: embedding_score / 0.4 * 40 = embedding_score * 66
+    points = int(embedding_score * 66)
     return min(40, max(0, points))
 
 
@@ -513,6 +548,16 @@ def _apply_business_rules(
         decision = "review"
     else:
         decision = "reject"
+
+    # Confidence-basierte Review-Queue Override
+    # Bei Low-Confidence oder Grenzwerten mit Medium-Confidence -> Review statt Auto-Decision
+    if not _should_auto_decide(keyword_result, score):
+        confidence_level = keyword_result.confidence if keyword_result else "unknown"
+        logger.info(
+            "Low-confidence override: Score=%d, Confidence=%s -> forcing review",
+            score, confidence_level
+        )
+        decision = "review"
 
     # Ensure proposed rate is above minimum
     proposed_rate = match_output.proposed_rate

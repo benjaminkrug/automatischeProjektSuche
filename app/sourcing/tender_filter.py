@@ -92,39 +92,93 @@ class TenderScore:
 # ============================================================
 
 
+def _create_fuzzy_pattern(base: str) -> str:
+    """M3: Erstelle Regex mit deutschen Verb-Varianten.
+
+    Ermöglicht flexibleres Matching von deutschen Wörtern:
+    - entwicklung → entwickl(ung|en|t|te|eln)
+    - programmierung → programm(ierung|ieren|iert)
+
+    Args:
+        base: Basiswort (z.B. "entwicklung")
+
+    Returns:
+        Regex-Pattern mit Varianten
+    """
+    # Deutsche Verb-Suffixe
+    if base.endswith("ung"):
+        stem = base[:-3]
+        return rf"{stem}(ung|en|t|te|eln)"
+    elif base.endswith("ierung"):
+        stem = base[:-6]
+        return rf"{stem}(ierung|ieren|iert)"
+    elif base.endswith("tion"):
+        stem = base[:-4]
+        return rf"{stem}(tion|tionen)"
+    return base
+
+
+# M3: Fuzzy-Patterns für häufige deutsche Begriffe
+FUZZY_ENTWICKLUNG = _create_fuzzy_pattern("entwicklung")
+FUZZY_PROGRAMMIERUNG = _create_fuzzy_pattern("programmierung")
+FUZZY_ERSTELLUNG = _create_fuzzy_pattern("erstellung")
+FUZZY_GESTALTUNG = _create_fuzzy_pattern("gestaltung")
+
+
 # Webanwendung-Indikatoren (explizite Forderung)
+# M3: Mit Fuzzy-Matching für deutsche Verben
 WEBAPP_PATTERNS = [
-    r"entwicklung\s+(einer?\s+)?webanwendung",
-    r"webanwendung\s+(erstellen|entwickeln|programmieren|soll|muss)",
-    r"webapplikation\s+(soll|muss|ist\s+zu|erstellen|entwickeln)",
+    # Einfache Keyword-Patterns (Fallback - höchste Priorität)
+    r"\bwebanwendung\b",
+    r"\bwebapplikation\b",
+    r"\bwebportal\b",
+    r"\bweb-anwendung\b",
+    r"\bweb-applikation\b",
+    # M3: Fuzzy-Patterns für flexible Verb-Erkennung
+    rf"{FUZZY_ENTWICKLUNG}\s+.{{0,30}}webanwendung",  # Erlaubt bis zu 30 Zeichen dazwischen
+    rf"webanwendung\s+({FUZZY_ERSTELLUNG}|{FUZZY_ENTWICKLUNG}|{FUZZY_PROGRAMMIERUNG}|soll|muss)",
+    rf"webapplikation\s+(soll|muss|ist\s+zu|{FUZZY_ERSTELLUNG}|{FUZZY_ENTWICKLUNG})",
     r"webbasiert(e|es|en)?\s+(portal|system|anwendung|lösung|plattform)",
     r"browser-basiert",
-    r"responsive\s+web(design|anwendung|applikation)",
-    r"frontend[- ]entwicklung",
-    r"(react|vue|angular|next\.?js|nuxt)\s+(anwendung|applikation|entwicklung)",
-    r"web[- ]?(app|application|portal)\s+(entwicklung|erstellen|programmieren)",
+    rf"responsive\s+.{{0,20}}(web|anwendung|applikation)",  # Flexibler
+    rf"frontend[- ]?{FUZZY_ENTWICKLUNG}",
+    rf"(react|vue|angular|next\.?js|nuxt)\s+(anwendung|applikation|{FUZZY_ENTWICKLUNG})",
+    rf"web[- ]?(app|application|portal)\s+({FUZZY_ENTWICKLUNG}|{FUZZY_ERSTELLUNG}|{FUZZY_PROGRAMMIERUNG})",
     r"online[- ]?(portal|plattform|anwendung)",
     r"single[- ]page[- ]application",
     r"progressive[- ]web[- ]app",
     # Webseiten-Erkennung (klassische Websites, nicht nur Web-Apps)
-    r"(erstellung|entwicklung|programmierung|relaunch|neugestaltung)\s+(einer?\s+)?(web(site|seite)|homepage|internetseite)",
-    r"(web(site|seite)|homepage|internetseite|internetauftritt)\s+(erstellen|entwickeln|programmieren|neugestalten|relaunchen)",
+    rf"({FUZZY_ERSTELLUNG}|{FUZZY_ENTWICKLUNG}|{FUZZY_PROGRAMMIERUNG}|relaunch|neu{FUZZY_GESTALTUNG})\s+.{{0,20}}(web(site|seite)|homepage|internetseite)",
+    rf"(web(site|seite)|homepage|internetseite|internetauftritt)\s+({FUZZY_ERSTELLUNG}|{FUZZY_ENTWICKLUNG}|{FUZZY_PROGRAMMIERUNG}|neugestalten|relaunchen)",
     r"landingpage",
-    r"(web(site|seite)|homepage)[- ]?(design|entwicklung|erstellung|relaunch)",
+    rf"(web(site|seite)|homepage)[- ]?(design|{FUZZY_ENTWICKLUNG}|{FUZZY_ERSTELLUNG}|relaunch)",
+    # M3: Zusätzliche Fuzzy-Patterns
+    rf"software[- ]?{FUZZY_ENTWICKLUNG}",
+    rf"anwendungs[- ]?{FUZZY_ENTWICKLUNG}",
+    rf"portal[- ]?{FUZZY_ENTWICKLUNG}",
+    rf"plattform[- ]?{FUZZY_ENTWICKLUNG}",
 ]
 
 # Mobile App-Indikatoren (explizite Forderung)
+# M3: Mit Fuzzy-Matching
 MOBILE_PATTERNS = [
-    r"(mobile|native)\s+app\s+(entwicklung|erstellen|programmieren)",
+    rf"(mobile|native)\s+app\s+({FUZZY_ENTWICKLUNG}|{FUZZY_ERSTELLUNG}|{FUZZY_PROGRAMMIERUNG})",
     r"ios[- ]und[- ]android",
     r"(ios|android)[- ]app",
     r"smartphone[- ]app",
-    r"(flutter|react\s*native|kotlin|swift)\s+(app|anwendung|entwicklung)",
+    rf"(flutter|react\s*native|kotlin|swift)\s+(app|anwendung|{FUZZY_ENTWICKLUNG})",
     r"app\s+für\s+(ios|android|mobile\s+endgeräte|smartphones?)",
     r"mobile\s+(anwendung|applikation|lösung)",
     r"(tablet|ipad|android)[- ]?(app|anwendung)",
-    r"cross[- ]?platform[- ]?(app|entwicklung)",
+    rf"cross[- ]?platform[- ]?(app|{FUZZY_ENTWICKLUNG})",
+    # M3: Zusätzliche Mobile-Patterns
+    rf"app[- ]?{FUZZY_ENTWICKLUNG}",
+    rf"mobile[- ]?{FUZZY_ENTWICKLUNG}",
 ]
+
+# Pre-compiled regex patterns for performance
+COMPILED_WEBAPP_PATTERNS = [re.compile(p, re.IGNORECASE) for p in WEBAPP_PATTERNS]
+COMPILED_MOBILE_PATTERNS = [re.compile(p, re.IGNORECASE) for p in MOBILE_PATTERNS]
 
 # Tech-Stack Keywords
 TECH_STACK_KEYWORDS = [
@@ -184,6 +238,16 @@ def find_pattern_matches(text: str, patterns: List[str]) -> List[str]:
     return matches
 
 
+def find_compiled_pattern_matches(text: str, compiled_patterns: list) -> List[str]:
+    """Find all pattern matches using pre-compiled regex patterns."""
+    matches = []
+    for pattern in compiled_patterns:
+        match = pattern.search(text)
+        if match:
+            matches.append(match.group(0))
+    return matches
+
+
 def find_percentage(text: str, keyword: str) -> Optional[int]:
     """Find percentage value associated with a keyword."""
     pattern = rf"{keyword}[:\s]+(\d+)\s*%"
@@ -210,8 +274,8 @@ def analyze_tech_requirements(description: str, pdf_text: str = "") -> TechAnaly
     """
     combined_text = f"{description} {pdf_text}".lower()
 
-    webapp_matches = find_pattern_matches(combined_text, WEBAPP_PATTERNS)
-    mobile_matches = find_pattern_matches(combined_text, MOBILE_PATTERNS)
+    webapp_matches = find_compiled_pattern_matches(combined_text, COMPILED_WEBAPP_PATTERNS)
+    mobile_matches = find_compiled_pattern_matches(combined_text, COMPILED_MOBILE_PATTERNS)
 
     # Tech-Stack-Erkennung
     stack_matches = [kw for kw in TECH_STACK_KEYWORDS if kw.lower() in combined_text]
@@ -438,6 +502,68 @@ def check_eligibility(description: str, pdf_text: str = "") -> Tuple[str, str]:
 
 
 # ============================================================
+# Budget Extraction
+# ============================================================
+
+# German number: "50.000" or "100.000,00" or "75000" or "75000,00"
+_DE_NUMBER = r"(\d{1,3}(?:\.\d{3})*(?:,\d{2})?|\d{4,}(?:,\d{2})?)"
+
+# Pre-compiled budget patterns for German formats
+_BUDGET_PATTERNS = [
+    # Range: "50.000 bis 250.000 EUR"
+    re.compile(
+        _DE_NUMBER + r"\s*(?:bis|-)\s*" + _DE_NUMBER + r"\s*(?:EUR|€|Euro)",
+        re.IGNORECASE,
+    ),
+    # Single value: "100.000 EUR" or "75000 Euro"
+    re.compile(
+        _DE_NUMBER + r"\s*(?:EUR|€|Euro)",
+        re.IGNORECASE,
+    ),
+    # Mio format: "1,5 Mio. EUR"
+    re.compile(
+        r"(\d{1,3}(?:,\d{1,2})?)\s*(?:Mio\.?|Million(?:en)?)\s*(?:EUR|€|Euro)?",
+        re.IGNORECASE,
+    ),
+]
+
+
+def extract_budget_from_text(text: str) -> Optional[int]:
+    """Extract budget/volume from German-format text.
+
+    Supports formats like:
+    - "50.000 bis 250.000 EUR" (returns max)
+    - "100.000,00 €"
+    - "1,5 Mio. EUR"
+
+    Returns:
+        Budget in EUR as integer, or None if not found.
+    """
+    if not text:
+        return None
+
+    # Range pattern (return max value)
+    match = _BUDGET_PATTERNS[0].search(text)
+    if match:
+        max_val = match.group(2).replace(".", "").replace(",", ".")
+        return int(float(max_val))
+
+    # Single value
+    match = _BUDGET_PATTERNS[1].search(text)
+    if match:
+        val = match.group(1).replace(".", "").replace(",", ".")
+        return int(float(val))
+
+    # Mio format
+    match = _BUDGET_PATTERNS[2].search(text)
+    if match:
+        val = float(match.group(1).replace(",", "."))
+        return int(val * 1_000_000)
+
+    return None
+
+
+# ============================================================
 # Scoring Functions
 # ============================================================
 
@@ -479,9 +605,12 @@ def score_client(
 
     score = 0
 
-    # Win-rate bonus
+    # Win-rate bonus (require minimum 3 historical projects for full bonus)
     if win_rate and win_rate > 0.3:
-        score += 15  # Good success rate
+        if tenders_applied >= 3:
+            score += 15  # Full bonus with sufficient data
+        else:
+            score += 5  # Reduced bonus with limited data
 
     # Known client
     if tenders_applied > 0:
@@ -491,7 +620,7 @@ def score_client(
     if payment_rating and payment_rating >= 4:
         score += 5
 
-    return score
+    return min(score, 15)  # Cap at max 15
 
 
 def score_tender(
@@ -552,6 +681,12 @@ def score_tender(
     # ============================================================
     # VOLUMEN (15 Punkte)
     # ============================================================
+    # Fallback: Budget aus Beschreibungstext extrahieren
+    if not budget_max:
+        budget_max = extract_budget_from_text(combined_text)
+        if budget_max:
+            score.reasons.append(f"Budget aus Text: {budget_max:,}€")
+
     if budget_max:
         if settings.tender_budget_min <= budget_max <= settings.tender_budget_max:
             score.volume_score = 15
@@ -643,19 +778,22 @@ def score_tender(
         score.reasons.append(f"Bekannter Auftraggeber: +{score.client_score}P")
 
     # ============================================================
-    # DEADLINE (10 Punkte)
+    # DEADLINE (10 Punkte) mit Ampel-System
     # ============================================================
     if tender_deadline:
         days_until = (tender_deadline - datetime.now()).days
         if days_until >= 21:
             score.deadline_score = 10
-            score.reasons.append(f"Deadline: {days_until} Tage")
-        elif days_until >= settings.tender_deadline_min_days:
+            score.reasons.append(f"Deadline OK: {days_until} Tage")
+        elif days_until >= 14:
             score.deadline_score = 5
-            score.reasons.append(f"Deadline knapp: {days_until} Tage")
+            score.reasons.append(f"Deadline GELB: {days_until} Tage")
+        elif days_until >= 7:
+            score.deadline_score = 2
+            score.reasons.append(f"Deadline ROT: {days_until} Tage")
         else:
             score.deadline_score = 0
-            score.reasons.append(f"Deadline zu kurz: {days_until} Tage")
+            score.reasons.append(f"Deadline KRITISCH: {days_until} Tage")
 
     # ============================================================
     # TOTAL & NORMALIZATION
@@ -674,8 +812,30 @@ def score_tender(
         cpv_bonus
     )
 
-    # Normalize to 0-100 (max theoretical score ~145)
-    max_score = 145
+    # Normalize to 0-100
+    # Max theoretical: Tech 50 + Volume 15 + Procedure 15 + Award 10 +
+    #                  Eligibility 15 + Accessibility 5 + Security 0 +
+    #                  Consortium 10 + Client 15 + Deadline 10 = 145
+    # Plus potential CPV bonus (up to 10)
+    max_score = 155
     score.normalized = min(100, int((score.total / max_score) * 100))
 
     return score
+
+
+def get_deadline_urgency(tender_deadline: Optional[datetime]) -> str:
+    """Return deadline urgency level for UI display.
+
+    Returns:
+        'green', 'yellow', 'red', or 'critical'
+    """
+    if not tender_deadline:
+        return "green"
+    days = (tender_deadline - datetime.now()).days
+    if days >= 21:
+        return "green"
+    if days >= 14:
+        return "yellow"
+    if days >= 7:
+        return "red"
+    return "critical"

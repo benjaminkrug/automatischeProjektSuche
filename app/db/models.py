@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Text, Float, Boolean, DateTime,
-    ForeignKey, UniqueConstraint, ARRAY, JSON
+    ForeignKey, UniqueConstraint, ARRAY, JSON, Index
 )
 from sqlalchemy.orm import declarative_base, relationship
 from pgvector.sqlalchemy import Vector
@@ -48,8 +48,30 @@ class Project(Base):
     procedure_type = Column(String(50))  # Vergabeart
     score = Column(Integer)  # Berechneter Score
 
+    # Keyword-Scoring (persistiert für Audit-Trail) - M2
+    keyword_score = Column(Integer, nullable=True)  # 0-40 Gesamt
+    keyword_confidence = Column(String(10), nullable=True)  # high/medium/low
+    keyword_tier_1 = Column(ARRAY(String), nullable=True)  # Gefundene T1-Keywords
+    keyword_tier_2 = Column(ARRAY(String), nullable=True)  # Gefundene T2-Keywords
+    keyword_reject = Column(ARRAY(String), nullable=True)  # Gefundene Reject-Keywords
+    keyword_combo_bonus = Column(Integer, nullable=True)  # Combo-Bonus
+
+    # Processing state for resume/checkpoint - M4
+    processing_state = Column(String(20), default="pending")  # pending/embedding/research/matching/done/error
+
     __table_args__ = (
         UniqueConstraint("source", "external_id", name="uq_project_source_external_id"),
+        # Q3: Status-Filter für Orchestrator
+        Index("ix_projects_status", "status"),
+        Index("ix_projects_project_type", "project_type"),
+        Index("ix_projects_analyzed_at", "analyzed_at"),
+        # Tender-spezifisch
+        Index("ix_projects_eligibility_check", "eligibility_check"),
+        Index("ix_projects_score", "score"),
+        # Composite für häufige Patterns
+        Index("ix_projects_type_status", "project_type", "status"),
+        # Processing state for resume
+        Index("ix_projects_processing_state", "processing_state"),
     )
 
     rejection_reasons = relationship("RejectionReason", back_populates="project")
@@ -100,6 +122,12 @@ class ReviewQueue(Base):
     resolved_at = Column(DateTime)
     resolution = Column(String(50))
 
+    __table_args__ = (
+        # Q3: Indizes für Review-Queue
+        Index("ix_review_queue_project_id", "project_id"),
+        Index("ix_review_queue_resolved_at", "resolved_at"),
+    )
+
     project = relationship("Project", back_populates="review_queue_entries")
 
 
@@ -115,6 +143,13 @@ class ApplicationLog(Base):
     applied_at = Column(DateTime, default=datetime.utcnow)
     outcome = Column(String(50))
     outcome_at = Column(DateTime)
+
+    __table_args__ = (
+        # Q3: Indizes für Application-Logs
+        Index("ix_application_logs_project_id", "project_id"),
+        Index("ix_application_logs_outcome", "outcome"),
+        Index("ix_application_logs_team_member_id", "team_member_id"),
+    )
 
     project = relationship("Project", back_populates="application_logs")
     team_member = relationship("TeamMember", back_populates="application_logs")
@@ -136,7 +171,7 @@ class ClientResearchCache(Base):
 
 
 class ScraperRun(Base):
-    """Tracks scraper runs for monitoring and analytics."""
+    """Tracks scraper runs for monitoring and analytics (M6: Health Monitoring)."""
     __tablename__ = "scraper_runs"
 
     id = Column(Integer, primary_key=True)
@@ -150,6 +185,12 @@ class ScraperRun(Base):
     error_count = Column(Integer, default=0)
     error_details = Column(Text)  # JSON array of error details
     duration_seconds = Column(Float)
+
+    # M6: Indizes für Scraper Health Monitoring
+    __table_args__ = (
+        Index("ix_scraper_runs_portal_started", "portal", "started_at"),
+        Index("ix_scraper_runs_status", "status"),
+    )
 
 
 class AIUsage(Base):
@@ -259,3 +300,45 @@ class TenderDecision(Base):
 
     project = relationship("Project", backref="tender_decisions")
     lot = relationship("TenderLot", backref="tender_decisions")
+
+
+# ============================================================
+# Phase 2/3 Models
+# ============================================================
+
+# Note: ScraperStats removed - use ScraperRun instead (already exists with same functionality)
+
+
+class ScoreHistory(Base):
+    """A3: Historie aller Score-Berechnungen für ML-Training."""
+    __tablename__ = "score_history"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
+    calculated_at = Column(DateTime, default=datetime.utcnow)
+
+    # Gesamt-Scores
+    total_score = Column(Integer, nullable=False)
+    keyword_score = Column(Integer)
+    embedding_score = Column(Float)
+
+    # Breakdown
+    tier_1_score = Column(Integer)
+    tier_2_score = Column(Integer)
+    tier_3_score = Column(Integer)
+    combo_bonus = Column(Integer)
+
+    # Kontext
+    model_version = Column(String(50))  # z.B. "v1.2.0"
+    confidence = Column(String(10))
+
+    # Decision
+    decision = Column(String(20))  # apply/review/reject
+    decision_reason = Column(Text)
+
+    __table_args__ = (
+        Index("ix_score_history_project_id", "project_id"),
+        Index("ix_score_history_calculated_at", "calculated_at"),
+    )
+
+    project = relationship("Project", backref="score_history")

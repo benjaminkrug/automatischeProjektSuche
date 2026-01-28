@@ -567,6 +567,8 @@ def get_tenders(
     eligibility: Optional[str] = None,
     days_until_deadline: Optional[int] = None,
     status: Optional[str] = None,
+    search_query: Optional[str] = None,
+    sort_by: str = "score",
     limit: int = 100,
 ) -> List[Project]:
     """Get filtered tenders.
@@ -578,6 +580,8 @@ def get_tenders(
         eligibility: Filter by eligibility status
         days_until_deadline: Filter by maximum days until deadline
         status: Filter by status
+        search_query: Full-text search on title + description (ILIKE)
+        sort_by: Sort field ('score' or 'deadline')
         limit: Maximum number of results
 
     Returns:
@@ -601,7 +605,18 @@ def get_tenders(
     if status and status != "Alle":
         query = query.filter(Project.status == status)
 
-    return query.order_by(Project.score.desc()).limit(limit).all()
+    if search_query:
+        like_pattern = f"%{search_query}%"
+        query = query.filter(
+            Project.title.ilike(like_pattern) | Project.description.ilike(like_pattern)
+        )
+
+    if sort_by == "deadline":
+        query = query.order_by(Project.tender_deadline.asc().nullslast())
+    else:
+        query = query.order_by(Project.score.desc())
+
+    return query.limit(limit).all()
 
 
 def get_lots_for_project(session: Session, project_id: int) -> List[TenderLot]:

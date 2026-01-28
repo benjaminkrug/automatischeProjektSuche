@@ -101,6 +101,16 @@ class Settings(BaseSettings):
         default=70, ge=0, le=100, description="Score at or above which tenders go to review"
     )
 
+    # Email notifications
+    notification_email: Optional[str] = Field(
+        default=None, description="Email address for tender notifications"
+    )
+    smtp_host: Optional[str] = Field(default=None, description="SMTP server hostname")
+    smtp_port: int = Field(default=587, description="SMTP server port")
+    smtp_user: Optional[str] = Field(default=None, description="SMTP username")
+    smtp_password: Optional[str] = Field(default=None, description="SMTP password")
+    smtp_from: Optional[str] = Field(default=None, description="Sender email address")
+
 
 # Singleton settings instance
 settings = Settings()

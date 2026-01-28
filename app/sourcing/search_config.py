@@ -214,6 +214,73 @@ REQUIRED_CONTEXT_KEYWORDS: List[str] = [
 ]
 
 
+def get_search_keywords(max_keywords: int = 8, rotate: bool = True) -> List[str]:
+    """Hole Suchbegriffe aus Team-Skills oder Fallback auf TIER_1.
+
+    Liest aktive Team-Mitglieder aus der DB und extrahiert deren Skills.
+    Filtert auf bekannte TIER_1_KEYWORDS für relevante Suchergebnisse.
+    Mit täglicher Rotation für mehr Projektvielfalt.
+
+    Args:
+        max_keywords: Maximale Anzahl Keywords (für URL-Länge)
+        rotate: Ob tägliche Rotation aktiviert sein soll (default: True)
+
+    Returns:
+        Liste von Suchbegriffen (lowercase)
+    """
+    import random
+    import hashlib
+    from datetime import date
+
+    from app.ai.keyword_scoring import TIER_1_KEYWORDS
+
+    # Fallback-Keywords falls DB nicht erreichbar oder leer
+    fallback = ["python", "vue", "java", "c#", "django", "spring"]
+
+    try:
+        from app.db.session import get_session
+        from app.db.models import TeamMember
+
+        with get_session() as session:
+            members = session.query(TeamMember).filter(
+                TeamMember.active == True
+            ).all()
+
+            if not members:
+                keywords = fallback
+            else:
+                # Sammle alle Skills, normalisiere, dedupliziere
+                all_skills: set[str] = set()
+                for member in members:
+                    if member.skills:
+                        all_skills.update(s.lower() for s in member.skills)
+
+                if not all_skills:
+                    keywords = fallback
+                else:
+                    # Filter auf bekannte TIER_1 Keywords für präzise Suche
+                    tier_1_lower = {kw.lower() for kw in TIER_1_KEYWORDS}
+                    matched_keywords = all_skills & tier_1_lower
+
+                    if matched_keywords:
+                        keywords = sorted(matched_keywords)
+                    else:
+                        keywords = fallback
+
+            # Tägliche Rotation falls aktiviert und mehr Keywords als benötigt
+            if rotate and len(keywords) > max_keywords:
+                # Deterministischer Seed basierend auf Datum
+                seed = int(hashlib.md5(str(date.today()).encode()).hexdigest(), 16)
+                rng = random.Random(seed)
+                return rng.sample(keywords, max_keywords)
+
+            return keywords[:max_keywords]
+
+    except Exception:
+        # Bei DB-Fehler: Fallback verwenden
+        return fallback[:max_keywords]
+
+
 def get_portal_config(source_name: str) -> PortalSearchConfig:
     """Get configuration for a portal by name.
 

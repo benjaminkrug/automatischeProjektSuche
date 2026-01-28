@@ -1,8 +1,12 @@
 """Base classes for portal scrapers."""
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
+
+# Pre-compiled CPV code pattern: 8 digits with optional check digit (e.g. 72200000-7)
+_CPV_CODE_PATTERN = re.compile(r"\b(\d{8})(?:-\d)?\b")
 
 
 @dataclass
@@ -65,3 +69,28 @@ class BaseScraper(ABC):
     def is_public_sector(self) -> bool:
         """Check if this portal is public sector."""
         return False
+
+
+def extract_cpv_codes(text: str) -> list[str]:
+    """Extract CPV codes from text.
+
+    Finds patterns like '72200000-7' or '72200000' and returns
+    the full code with check digit if present.
+
+    Args:
+        text: Text to search for CPV codes
+
+    Returns:
+        List of unique CPV codes found (8-digit format)
+    """
+    if not text:
+        return []
+    matches = _CPV_CODE_PATTERN.findall(text)
+    # Deduplicate while preserving order
+    seen = set()
+    result = []
+    for code in matches:
+        if code not in seen:
+            seen.add(code)
+            result.append(code)
+    return result

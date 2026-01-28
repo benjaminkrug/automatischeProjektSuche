@@ -12,6 +12,10 @@ from app.services.embedding_service import create_embedding
 
 logger = get_logger("ai.embedding_search")
 
+# Minimum embedding similarity threshold (25%)
+# Candidates below this threshold are considered weak matches and skipped
+MIN_EMBEDDING_SIMILARITY = 0.25
+
 
 def find_top_matching_members(
     db: Session,
@@ -62,17 +66,36 @@ def find_top_matching_members(
     logger.debug("Found %d matching team members", len(results))
 
     # Return (TeamMember, similarity_score) tuples
+    # Q1 Fix: Construct TeamMember directly from row to avoid N+1 queries
+    # Q2 Fix: Apply minimum similarity threshold to skip weak matches
     members_with_scores = []
     for row in results:
-        member = (
-            db.query(TeamMember).filter(TeamMember.id == row.id).first()
-        )
-        if member:
-            similarity = float(row.similarity) if row.similarity else 0.0
-            members_with_scores.append((member, similarity))
+        similarity = float(row.similarity) if row.similarity else 0.0
+
+        # Q2: Skip weak matches below threshold
+        if similarity < MIN_EMBEDDING_SIMILARITY:
             logger.debug(
-                "  %s: similarity=%.3f", member.name, similarity
+                "Skipping weak match: %s (%.3f < %.3f threshold)",
+                row.name,
+                similarity,
+                MIN_EMBEDDING_SIMILARITY,
             )
+            continue
+
+        # Q1 Fix: Construct TeamMember directly from SQL result
+        # This avoids N separate queries for each result
+        member = TeamMember(
+            id=row.id,
+            name=row.name,
+            role=row.role,
+            skills=row.skills,
+            years_experience=row.years_experience,
+            min_hourly_rate=row.min_hourly_rate,
+            cv_path=row.cv_path,
+            active=row.active,
+        )
+        members_with_scores.append((member, similarity))
+        logger.debug("  %s: similarity=%.3f", member.name, similarity)
 
     return members_with_scores
 

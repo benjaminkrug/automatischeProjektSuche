@@ -57,6 +57,10 @@ TIER_1_KEYWORDS: Set[str] = {
     # Fullstack
     "fullstack",
     "full-stack",
+    #Backend
+    "backend",
+    #Frontend
+    "frontend",
 }
 
 # Tier 2: Starke Passung
@@ -208,9 +212,9 @@ TIER_3_KEYWORDS: Set[str] = {
 
 # Punktwerte pro Tier (skaliert für 40% Gewichtung)
 TIER_POINTS: Dict[KeywordTier, int] = {
-    KeywordTier.TIER_1: 20,  # Kernkompetenz
-    KeywordTier.TIER_2: 12,  # Gute Passung
-    KeywordTier.TIER_3: 6,   # Nice-to-have
+    KeywordTier.TIER_1: 18,  # Kernkompetenz
+    KeywordTier.TIER_2: 10,  # Gute Passung
+    KeywordTier.TIER_3: 5,   # Nice-to-have
 }
 
 # Maximale Punkte pro Tier (Deckelung)
@@ -223,72 +227,34 @@ TIER_MAX_POINTS: Dict[KeywordTier, int] = {
 # GESAMT-MAXIMUM für Keyword-Score
 KEYWORD_SCORE_MAX = 40  # Entspricht 40% des Gesamt-Scores
 
-# Wertvolle Kombinationen -> Extra-Bonus (skaliert für 40% Gewichtung)
+# Q5: Wertvolle Kombinationen -> Extra-Bonus (reduziert auf 20 wirkungsvollste)
+# Fokus auf Team-Kernkompetenzen: Vue, Python, C#/.NET, Java
 COMBO_BONUSES: Dict[FrozenSet[str], int] = {
-    # Frontend + Backend = Fullstack-Projekt
-    frozenset({"vue", "python"}): 6,
-    frozenset({"vue", "django"}): 6,
-    frozenset({"vue", "fastapi"}): 6,
+    # Fullstack-Combos (höchste Priorität - Team-Kernkompetenz)
+    frozenset({"vue", "python"}): 8,
+    frozenset({"vue", "django"}): 8,
     frozenset({"vue", "c#"}): 8,
-    frozenset({"vue", "dotnet"}): 8,
-    frozenset({"vue", "asp.net"}): 8,
     frozenset({"vue", ".net"}): 8,
-    frozenset({"vue", "sql"}): 8,
-    frozenset({"vue", "postgresql"}): 8,
-    frozenset({"vuejs", "python"}): 8,
-    frozenset({"vuejs", ".net"}): 8,
-    frozenset({"vuejs", "asp.net"}): 8,
-    frozenset({"vuejs", "dotnet"}): 8,
-    frozenset({"vuejs", "c#"}): 8,
-    frozenset({"vuejs", "sql"}): 8,
-    frozenset({"vuejs", "postgresql"}): 8,
-    frozenset({"angular", "python"}): 6,
-    frozenset({"angular", "django"}): 6,
-    frozenset({"angular", "fastapi"}): 6,
-    frozenset({"angular", "c#"}): 8,
-    frozenset({"angular", ".net"}): 8,
-    frozenset({"angular", "dotnet"}): 8,
-    frozenset({"angular", "asp.net"}): 8,
-    frozenset({"angular", "postgresql"}): 8,
-    frozenset({"nuxt", "python"}): 6,
-    frozenset({"react", "python"}): 5,
-    frozenset({"react", "node"}): 5,
-    frozenset({"react", "nodejs"}): 5,
-    # Frontend + DB = Vollständiges Projekt
-    frozenset({"react", "postgresql"}): 4,
-    frozenset({"vue", "mongodb"}): 4,
-    # API + Frontend = Moderne Architektur
-    frozenset({"api", "vue"}): 4,
-    frozenset({"graphql", "vue"}): 5,
-    frozenset({"graphql", "react"}): 5,
-    frozenset({"rest", "vue"}): 2,
-    # Cloud + Backend = DevOps-Readiness
-    frozenset({"docker", "python"}): 2,
-    frozenset({"kubernetes", "python"}): 4,
-    frozenset({"aws", "python"}): 2,
-    frozenset({"docker", "django"}): 4,
-    # Fullstack combinations
-    frozenset({"fullstack", "vue"}): 4,
-    frozenset({"fullstack", "python"}): 4,
-    # .NET Kombinationen
-    frozenset({"c#", "asp.net"}): 6,
-    frozenset({"c#", "blazor"}): 6,
-    frozenset({".net", "entity framework"}): 5,
-    frozenset({"c#", "postgresql"}): 4,
-    frozenset({"c#", "ms sql"}): 4,
-    frozenset({"c#", "docker"}): 2,
-    # Java Kombinationen
+    frozenset({"react", "python"}): 6,
+    frozenset({"react", "node"}): 6,
+    frozenset({"angular", "java"}): 6,
+    frozenset({"angular", "spring"}): 6,
+    # Backend-Stack Combos
+    frozenset({"python", "postgresql"}): 5,
     frozenset({"java", "spring"}): 6,
-    frozenset({"java", "spring boot"}): 6,
-    frozenset({"kotlin", "spring"}): 5,
-    frozenset({"java", "postgresql"}): 4,
-    frozenset({"java", "docker"}): 2,
-    # Frontend Kombinationen
-    frozenset({"vue", "tailwind"}): 4,
-    frozenset({"react", "tailwind"}): 4,
+    frozenset({"c#", "asp.net"}): 6,
+    frozenset({".net", "sql server"}): 5,
+    # Frontend-TypeScript Combos
     frozenset({"vue", "typescript"}): 5,
     frozenset({"react", "typescript"}): 5,
-    frozenset({"next.js", "react"}): 5,
+    # Cloud/DevOps Combos
+    frozenset({"docker", "kubernetes"}): 4,
+    frozenset({"python", "docker"}): 3,
+    frozenset({"java", "docker"}): 3,
+    # API Combos
+    frozenset({"graphql", "vue"}): 5,
+    frozenset({"graphql", "react"}): 5,
+    frozenset({"rest", "python"}): 3,
 }
 
 # Maximum combo bonus

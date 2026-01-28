@@ -20,22 +20,27 @@ class GulpScraper(BaseScraper):
 
     BASE_URL = "https://www.gulp.de"
 
-    # IT-specific search parameters
-    SEARCH_PARAMS = {
-        "category": "it",
-        "q": "Software Entwicklung",
-        "sort": "date",
-    }
+    def __init__(self):
+        self._browser_manager = get_browser_manager()
+
+    def _build_search_params(self) -> dict:
+        """Build search parameters with team-based keywords."""
+        from app.sourcing.search_config import get_search_keywords
+
+        keywords = get_search_keywords()
+        return {
+            "category": "it",
+            "q": " ".join(keywords),  # z.B. "python vue java c# django spring"
+            "sort": "date",
+        }
 
     @property
     def SEARCH_URL(self) -> str:
         """Build search URL with IT filter parameters."""
         from urllib.parse import urlencode
-        params = urlencode(self.SEARCH_PARAMS)
-        return f"{self.BASE_URL}/gulp2/g/projekte?{params}"
 
-    def __init__(self):
-        self._browser_manager = get_browser_manager()
+        params = urlencode(self._build_search_params())
+        return f"{self.BASE_URL}/gulp2/g/projekte?{params}"
 
     def is_public_sector(self) -> bool:
         return False

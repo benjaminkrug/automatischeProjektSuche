@@ -31,18 +31,26 @@ def render_score_breakdown(session, project):
     fv = decision.feature_vector
 
     breakdown = [
-        ("Tech-Fit", fv.get("tech_score", 0), 40),
+        ("Tech-Fit", fv.get("tech_score", 0), 50),
         ("Volumen", fv.get("volume_score", 0), 15),
         ("Vergabeart", fv.get("procedure_score", 0), 15),
         ("Zuschlag", fv.get("award_criteria_score", 0), 10),
         ("Eignung", fv.get("eligibility_score", 0), 15),
+        ("Barrierefrei", fv.get("accessibility_score", 0), 5),
+        ("Sicherheit", fv.get("security_score", 0), 0),
+        ("Konsortium", fv.get("consortium_score", 0), 10),
+        ("Auftraggeber", fv.get("client_score", 0), 15),
         ("Deadline", fv.get("deadline_score", 0), 10),
     ]
 
     for name, score, max_score in breakdown:
-        pct = score / max_score if max_score > 0 else 0
-        bar = "|" * int(pct * 10) + "-" * (10 - int(pct * 10))
-        st.text(f"{name:12} {score:3}/{max_score:2}  [{bar}]")
+        if max_score > 0:
+            pct = score / max_score
+            bar = "|" * int(pct * 10) + "-" * (10 - int(pct * 10))
+            st.text(f"{name:12} {score:3}/{max_score:2}  [{bar}]")
+        elif score != 0:
+            # Security: only show if non-zero (blocker)
+            st.text(f"{name:12} {score:3}     [BLOCKER]")
 
 
 def render_deadline_badge(tender) -> str:

@@ -2,6 +2,9 @@
 
 Flow:
 1. Scraping -> 2. Dedupe -> 3. Embeddings -> 4. Research -> 5. Matching -> 6. Decision -> 7. Documents -> 8. Logging
+
+M4: Added checkpoint/resume system with processing_state
+M5: Prepared for parallel processing (MAX_PARALLEL_PROJECTS)
 """
 
 import asyncio
@@ -9,6 +12,10 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional
+
+# M5: Maximum parallel project processing (for future async implementation)
+# Currently sequential, but this constant is used to limit concurrency when enabled
+MAX_PARALLEL_PROJECTS = 4
 
 
 def _run_async(coro):
@@ -59,6 +66,7 @@ from app.db.models import (
     Project,
     RejectionReason,
     ReviewQueue,
+    ScoreHistory,
     TeamMember,
 )
 from app.db.session import SessionLocal
@@ -272,71 +280,141 @@ class DailyOrchestrator:
         return saved
 
     def _process_project(self, project: Project) -> None:
-        """Process a single project through the pipeline."""
+        """Process a single project through the pipeline.
+
+        M4: Implements checkpoint system for resume capability.
+        Each phase updates processing_state before starting work.
+        """
         logger.info(SEPARATOR_LINE)
         logger.info("Projekt: %s...", project.title[:60])
         logger.info("Quelle: %s | ID: %s", project.source, project.external_id)
         logger.info(SEPARATOR_LINE)
+
+        # M4: Skip already completed projects
+        if project.processing_state == "done":
+            logger.info("  Bereits verarbeitet - übersprungen")
+            return
 
         try:
             # Check capacity
             if not self._check_capacity(project):
                 return
 
-            # Phase 2.5: Detailed Keyword-Scoring (neues System)
-            keyword_score_result = self._calculate_keyword_score_detailed(project)
+            # M4: Keyword-Scoring Phase (checkpoint: scoring)
+            if project.processing_state in ("pending", "scoring"):
+                project.processing_state = "scoring"
+                self.db.commit()
 
-            # Early reject based on keyword analysis
-            if keyword_score_result.should_reject:
-                self._reject_project(
-                    project,
-                    "KEYWORD_REJECT",
-                    f"Ausschluss-Keywords gefunden: {', '.join(keyword_score_result.reject_keywords)}",
+                # Phase 2.5: Detailed Keyword-Scoring (neues System)
+                keyword_score_result = self._calculate_keyword_score_detailed(project)
+
+                # Early reject based on keyword analysis
+                if keyword_score_result.should_reject:
+                    self._reject_project(
+                        project,
+                        "KEYWORD_REJECT",
+                        f"Ausschluss-Keywords gefunden: {', '.join(keyword_score_result.reject_keywords)}",
+                    )
+                    project.processing_state = "done"
+                    self.db.commit()
+                    return
+
+                # Skip LLM for very low keyword scores with high confidence (cost saving)
+                if keyword_score_result.total_score < 10 and keyword_score_result.confidence == "high":
+                    logger.info(
+                        "  Skip LLM - zu niedriger Keyword-Score: %d [%s]",
+                        keyword_score_result.total_score,
+                        keyword_score_result.confidence,
+                    )
+                    self._reject_project(
+                        project,
+                        "LOW_KEYWORD_SCORE",
+                        f"Keyword-Score {keyword_score_result.total_score}/40 zu niedrig (Schwelle: 10)",
+                    )
+                    project.processing_state = "done"
+                    self.db.commit()
+                    return
+            else:
+                # Resume: Reconstruct keyword result from persisted data
+                keyword_score_result = KeywordScoreResult(
+                    total_score=project.keyword_score or 0,
+                    tier_1_keywords=project.keyword_tier_1 or [],
+                    tier_2_keywords=project.keyword_tier_2 or [],
+                    tier_3_keywords=[],
+                    reject_keywords=project.keyword_reject or [],
+                    tier_1_score=0,
+                    tier_2_score=0,
+                    tier_3_score=0,
+                    combo_bonus=project.keyword_combo_bonus or 0,
+                    reject_score=0,
+                    should_reject=False,
+                    confidence=project.keyword_confidence or "low",
                 )
-                return
 
-            # Skip LLM for very low keyword scores with high confidence (cost saving)
-            if keyword_score_result.total_score < 10 and keyword_score_result.confidence == "high":
-                logger.info(
-                    "  Skip LLM - zu niedriger Keyword-Score: %d [%s]",
-                    keyword_score_result.total_score,
-                    keyword_score_result.confidence,
+            # M4: Embedding Phase (checkpoint: embedding)
+            if project.processing_state in ("scoring", "embedding"):
+                project.processing_state = "embedding"
+                self.db.commit()
+
+                # Phase 3: Find matching team members
+                candidates = self._find_candidates(project)
+                if not candidates:
+                    project.processing_state = "done"
+                    self.db.commit()
+                    return
+
+                # Store candidates for potential resume (via project attributes)
+                self._cached_candidates = candidates
+            else:
+                candidates = getattr(self, "_cached_candidates", None)
+                if not candidates:
+                    candidates = self._find_candidates(project)
+
+            # M4: Research Phase (checkpoint: research)
+            if project.processing_state in ("embedding", "research"):
+                project.processing_state = "research"
+                self.db.commit()
+
+                # Phase 4: Research client
+                research = self._research_project(project)
+                self._cached_research = research
+            else:
+                research = getattr(self, "_cached_research", None)
+                if not research:
+                    research = self._research_project(project)
+
+            # M4: Matching Phase (checkpoint: matching)
+            if project.processing_state in ("research", "matching"):
+                project.processing_state = "matching"
+                self.db.commit()
+
+                # Phase 5: Match project (mit Keyword-Score)
+                match_result = self._score_match(
+                    project, research, candidates, keyword_score_result
                 )
-                self._reject_project(
-                    project,
-                    "LOW_KEYWORD_SCORE",
-                    f"Keyword-Score {keyword_score_result.total_score}/40 zu niedrig (Schwelle: 10)",
-                )
-                return
+                self._stats.analyzed += 1
 
-            # Phase 3: Find matching team members
-            candidates = self._find_candidates(project)
-            if not candidates:
-                return
+                # Phase 6: Execute decision
+                self._execute_decision(project, match_result, research)
 
-            # Phase 4: Research client
-            research = self._research_project(project)
+                # Update project status
+                project.analyzed_at = datetime.utcnow()
+                project.proposed_rate = match_result.proposed_rate
+                project.rate_reasoning = match_result.rate_reasoning
 
-            # Phase 5: Match project (mit Keyword-Score)
-            match_result = self._score_match(
-                project, research, candidates, keyword_score_result
-            )
-            self._stats.analyzed += 1
-
-            # Phase 6: Execute decision
-            self._execute_decision(project, match_result, research)
-
-            # Update project status
-            project.analyzed_at = datetime.utcnow()
-            project.proposed_rate = match_result.proposed_rate
-            project.rate_reasoning = match_result.rate_reasoning
+            # M4: Mark as done
+            project.processing_state = "done"
             self.db.commit()
 
         except Exception as e:
             logger.error("Fehler bei Verarbeitung: %s", e)
             self._stats.errors += 1
+            # M4: Mark as error state for later resume/investigation
+            project.processing_state = "error"
             project.status = PROJECT_STATUS_ERROR
             self.db.commit()
+            # M4: Continue with next project instead of stopping
+            logger.info("  Fahre mit nächstem Projekt fort...")
 
     def _check_capacity(self, project: Project) -> bool:
         """Check if we have capacity for new applications."""
@@ -382,6 +460,8 @@ class DailyOrchestrator:
 
         This is the new keyword scoring system that replaces the simple
         boost/reject logic with a detailed score breakdown.
+
+        M2: Also persists the keyword score to the database for audit trail.
         """
         logger.info("  Phase 2.5: Keyword-Scoring...")
 
@@ -390,6 +470,15 @@ class DailyOrchestrator:
             description=project.description or "",
             pdf_text=project.pdf_text or "",
         )
+
+        # M2: Persist keyword score to database
+        project.keyword_score = result.total_score
+        project.keyword_confidence = result.confidence
+        project.keyword_tier_1 = result.tier_1_keywords if result.tier_1_keywords else None
+        project.keyword_tier_2 = result.tier_2_keywords if result.tier_2_keywords else None
+        project.keyword_reject = result.reject_keywords if result.reject_keywords else None
+        project.keyword_combo_bonus = result.combo_bonus
+        self.db.commit()
 
         # Log detailed breakdown
         if result.tier_1_keywords:
@@ -519,7 +608,44 @@ class DailyOrchestrator:
         )
         logger.info("  Entscheidung: %s", match_result.decision)
         logger.info("  Bester Kandidat: %s", match_result.best_candidate_name)
+
+        # A3: Save score history for ML training
+        self._save_score_history(project, match_result, keyword_result)
+
         return match_result
+
+    def _save_score_history(
+        self,
+        project: Project,
+        match_result: MatchResult,
+        keyword_result: KeywordScoreResult,
+    ) -> None:
+        """A3: Save score history for ML training.
+
+        Persists all scoring details for later analysis and model training.
+        """
+        try:
+            breakdown = match_result.score_breakdown
+            history = ScoreHistory(
+                project_id=project.id,
+                total_score=match_result.score,
+                keyword_score=keyword_result.total_score,
+                embedding_score=breakdown.embedding if breakdown else None,
+                tier_1_score=keyword_result.tier_1_score,
+                tier_2_score=keyword_result.tier_2_score,
+                tier_3_score=keyword_result.tier_3_score,
+                combo_bonus=keyword_result.combo_bonus,
+                model_version="v1.0.0",  # Track scoring algorithm version
+                confidence=keyword_result.confidence,
+                decision=match_result.decision,
+                decision_reason=match_result.rejection_reason_code,
+            )
+            self.db.add(history)
+            self.db.commit()
+            logger.debug("Score history saved for project %d", project.id)
+        except Exception as e:
+            logger.warning("Failed to save score history: %s", e)
+            # Don't fail the main pipeline for history saving errors
 
     def _execute_decision(
         self,

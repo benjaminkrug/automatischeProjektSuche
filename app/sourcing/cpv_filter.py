@@ -3,10 +3,16 @@
 CPV (Common Procurement Vocabulary) codes are used in EU public procurement
 to classify the subject of contracts. This module filters tenders based on
 relevant CPV codes for web/mobile development.
+
+M1: Added hierarchical CPV code matching for better coverage.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
+
+from app.core.logging import get_logger
+
+logger = get_logger("sourcing.cpv_filter")
 
 
 # Relevante CPV-Codes für Web/Mobile-Entwicklung
@@ -75,44 +81,110 @@ def normalize_cpv_code(code: str) -> str:
     return code[:8]
 
 
-def passes_cpv_filter(cpv_codes: Optional[List[str]]) -> CpvFilterResult:
+# M1: CPV-Code Hierarchie-Prefixe für relevante Bereiche
+# Erste 2-5 Ziffern definieren die Kategorie
+CPV_HIERARCHY_PREFIXES = {
+    "72": "IT-Dienstleistungen",           # Alle IT-Services
+    "722": "Softwareprogrammierung",        # Software allgemein
+    "7220": "Softwareentwicklung",          # Entwicklung spezifisch
+    "7221": "Anwendersoftware",             # Anwendungsentwicklung
+    "7226": "Softwaredienstleistungen",     # Software-Services
+    "7241": "Webdienste",                   # Web-Services
+}
+
+
+def _matches_cpv_hierarchy(code: str) -> Tuple[bool, int, str]:
+    """M1: Prüfe ob CPV-Code hierarchisch relevant ist.
+
+    Verwendet Prefix-Matching für übergeordnete CPV-Kategorien.
+
+    Args:
+        code: Normalisierter 8-stelliger CPV-Code
+
+    Returns:
+        Tuple (is_match, bonus_score, description)
+    """
+    # Prüfe Prefixe von lang nach kurz
+    for prefix_len in [5, 4, 3, 2]:
+        prefix = code[:prefix_len]
+        if prefix in CPV_HIERARCHY_PREFIXES:
+            # Reduzierter Bonus für Hierarchie-Match (weniger spezifisch)
+            bonus = max(1, 5 - prefix_len)  # Kürzerer Prefix = niedrigerer Bonus
+            desc = f"Hierarchie ({prefix}): {CPV_HIERARCHY_PREFIXES[prefix]}"
+            logger.debug("CPV hierarchy match: %s -> %s", code, desc)
+            return True, bonus, desc
+
+    return False, 0, ""
+
+
+def passes_cpv_filter(
+    cpv_codes: Optional[List[str]],
+    title: str = "",
+    description: str = "",
+) -> CpvFilterResult:
     """Pre-Filter: Check if CPV codes indicate relevant tender.
 
     Args:
         cpv_codes: List of CPV codes from the tender
+        title: Project title for text-based fallback
+        description: Project description for text-based fallback
 
     Returns:
         CpvFilterResult with filter decision and details
     """
     if not cpv_codes:
-        # No CPV codes - can't filter, pass through for text-based analysis
+        # Text-basierter Fallback statt Bypass
+        text = f"{title} {description}".lower()
+        software_keywords = [
+            "software", "entwicklung", "webapp", "portal",
+            "anwendung", "plattform", "app", "webentwicklung",
+            "programmierung", "it-system", "digitalisierung",
+            "webanwendung", "applikation", "fachverfahren",
+        ]
+        if any(kw in text for kw in software_keywords):
+            return CpvFilterResult(
+                passes=True,
+                relevant_codes=[],
+                excluded_codes=[],
+                bonus_score=0,
+                reason="Text-Fallback: Software-Keywords gefunden",
+            )
         return CpvFilterResult(
-            passes=True,
+            passes=False,
             relevant_codes=[],
             excluded_codes=[],
             bonus_score=0,
-            reason="Keine CPV-Codes vorhanden - Text-Analyse erforderlich",
+            reason="Keine CPV-Codes und keine Software-Keywords im Text",
         )
 
     relevant_found = []
     excluded_found = []
+    hierarchy_matches = []
     bonus_score = 0
 
     for code in cpv_codes:
         normalized = normalize_cpv_code(code)
 
-        # Check for relevant codes
+        # Check for relevant codes (exact match - highest priority)
         if normalized in RELEVANT_CPV_CODES:
             relevant_found.append(f"{normalized} ({RELEVANT_CPV_CODES[normalized]})")
             if normalized in BONUS_CPV_CODES:
                 bonus_score += BONUS_CPV_CODES[normalized]
+            continue  # Skip hierarchy check for exact matches
 
         # Check for excluded codes
         if normalized in EXCLUDED_CPV_CODES:
             excluded_found.append(f"{normalized} ({EXCLUDED_CPV_CODES[normalized]})")
+            continue  # Skip hierarchy check for excluded codes
+
+        # M1: Check for hierarchical matches (prefix-based)
+        is_hierarchy_match, hierarchy_bonus, hierarchy_desc = _matches_cpv_hierarchy(normalized)
+        if is_hierarchy_match:
+            hierarchy_matches.append(f"{normalized} ({hierarchy_desc})")
+            bonus_score += hierarchy_bonus
 
     # Decision logic
-    if excluded_found and not relevant_found:
+    if excluded_found and not relevant_found and not hierarchy_matches:
         return CpvFilterResult(
             passes=False,
             relevant_codes=relevant_found,
@@ -128,6 +200,16 @@ def passes_cpv_filter(cpv_codes: Optional[List[str]]) -> CpvFilterResult:
             excluded_codes=excluded_found,
             bonus_score=bonus_score,
             reason=f"Relevante CPV-Codes: {', '.join(relevant_found)}",
+        )
+
+    # M1: Check for hierarchy matches
+    if hierarchy_matches:
+        return CpvFilterResult(
+            passes=True,
+            relevant_codes=hierarchy_matches,  # Use hierarchy matches as relevant
+            excluded_codes=excluded_found,
+            bonus_score=bonus_score,
+            reason=f"CPV-Hierarchie-Match: {', '.join(hierarchy_matches)}",
         )
 
     # No relevant or excluded codes - pass through for text analysis

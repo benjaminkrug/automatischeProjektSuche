@@ -22,80 +22,94 @@ class FreelancermapScraper(BaseScraper):
     BASE_URL = "https://www.freelancermap.de"
     SEARCH_URL = f"{BASE_URL}/projektboerse.html"
 
-    # Search parameters for IT projects
-    SEARCH_PARAMS = {
-        "projektart": "1",  # Projektbasiert
-        "categories[]": "1",  # IT & Development
-        "sort": "date",  # Newest first (by date)
-    }
-
     def __init__(self):
         self._browser_manager = get_browser_manager()
+
+    def _build_search_params(self) -> dict:
+        """Build search parameters with team-based keywords.
+
+        Note: Freelancermap treats multiple space-separated keywords as AND search,
+        so we only use the first keyword to avoid empty results.
+        """
+        from app.sourcing.search_config import get_search_keywords
+
+        keywords = get_search_keywords()
+        # Freelancermap: Nur erstes Keyword, da AND-Verknüpfung
+        query = keywords[0] if keywords else ""
+        return {
+            "projektart": "1",  # Projektbasiert
+            "categories[]": "1",  # IT & Development
+            "query": query,  # Einzelnes Keyword für präzise Suche
+            "sort": "date",  # Newest first (by date)
+        }
+
+    @property
+    def SEARCH_PARAMS(self) -> dict:
+        """Dynamic search params property for backward compatibility."""
+        return self._build_search_params()
 
     def is_public_sector(self) -> bool:
         return False
 
     async def scrape(self, max_pages: int = 5) -> List[RawProject]:
-        """Scrape IT projects from freelancermap.de.
+        """Scrape IT projects from freelancermap.de with multi-keyword search.
+
+        Führt mehrere Suchdurchläufe mit verschiedenen Keywords durch und
+        dedupliziert die Ergebnisse für mehr Projektvielfalt.
 
         Args:
-            max_pages: Maximum number of result pages to scrape
+            max_pages: Maximum number of result pages to scrape per keyword
 
         Returns:
             List of RawProject objects
         """
-        projects = []
+        from app.sourcing.search_config import get_search_keywords
+
+        # Hole rotierte Keywords (max 4 für Multi-Keyword-Suche)
+        keywords = get_search_keywords(max_keywords=4)
+        logger.info("Multi-keyword search with: %s", keywords)
+
+        all_projects = []
+        seen_ids: set[str] = set()
 
         async with self._browser_manager.page_context() as page:
-            # Navigate to search page
-            search_url = self._build_search_url()
-            logger.debug("Navigating to %s", search_url)
-
+            # Handle cookie consent once at the start
+            first_url = self._build_search_url_for_keyword(keywords[0] if keywords else "")
             try:
                 await page.goto(
-                    search_url,
+                    first_url,
                     wait_until="domcontentloaded",
                     timeout=settings.scraper_timeout_ms,
                 )
+                await self._handle_cookie_consent(page)
             except Exception as e:
-                logger.error("Error loading search page: %s", e)
-                return projects
+                logger.error("Error loading initial page: %s", e)
+                return all_projects
 
-            # Handle cookie consent if present
-            await self._handle_cookie_consent(page)
+            # Scrape für jedes Keyword separat
+            pages_per_keyword = max(1, max_pages // len(keywords)) if keywords else max_pages
+            for keyword in keywords:
+                search_url = self._build_search_url_for_keyword(keyword)
+                logger.debug("Searching for keyword '%s': %s", keyword, search_url)
 
-            # First, collect all search results from all pages
-            all_results = []
-            for page_num in range(1, max_pages + 1):
-                logger.debug("Scraping search page %d...", page_num)
+                keyword_results = await self._scrape_single_keyword(
+                    page, search_url, pages_per_keyword
+                )
 
-                # Parse search results
-                results = await parse_search_results(page)
-                if not results:
-                    logger.debug("No results on page %d", page_num)
-                    break
+                # Deduplizieren basierend auf external_id
+                for result in keyword_results:
+                    if result["external_id"] not in seen_ids:
+                        seen_ids.add(result["external_id"])
+                        all_projects.append(result)
 
-                logger.debug("Found %d projects on page %d", len(results), page_num)
+                # Kurze Pause zwischen Keywords
+                await asyncio.sleep(1)
 
-                # Filter and collect results
-                for result in results:
-                    # Early filter on title only (description not available yet)
-                    if should_skip_project(result["title"], ""):
-                        logger.debug("Skipping (early filter): %s", result["title"][:50])
-                        continue
-                    all_results.append(result)
-
-                # Navigate to next page
-                if page_num < max_pages:
-                    has_next = await self._goto_next_page(page, page_num + 1)
-                    if not has_next:
-                        break
-                    await asyncio.sleep(1)  # Brief pause between pages
-
-            logger.debug("Collected %d projects from search, fetching details...", len(all_results))
+            logger.debug("Collected %d unique projects from search, fetching details...", len(all_projects))
 
             # Now fetch detail pages for all collected results
-            for result in all_results:
+            projects = []
+            for result in all_projects:
                 # Fetch detail page for description, skills, etc.
                 project = await self._get_project_details(
                     page,
@@ -116,6 +130,76 @@ class FreelancermapScraper(BaseScraper):
 
         logger.info("Total scraped: %d projects", len(projects))
         return projects
+
+    async def _scrape_single_keyword(
+        self, page, search_url: str, max_pages: int
+    ) -> List[dict]:
+        """Scrape search results for a single keyword.
+
+        Args:
+            page: Playwright page
+            search_url: Search URL with keyword
+            max_pages: Maximum pages to scrape
+
+        Returns:
+            List of result dicts with external_id, url, title
+        """
+        results = []
+
+        try:
+            await page.goto(
+                search_url,
+                wait_until="domcontentloaded",
+                timeout=settings.scraper_timeout_ms,
+            )
+        except Exception as e:
+            logger.warning("Error loading search page %s: %s", search_url, e)
+            return results
+
+        for page_num in range(1, max_pages + 1):
+            logger.debug("Scraping search page %d...", page_num)
+
+            # Parse search results
+            page_results = await parse_search_results(page)
+            if not page_results:
+                logger.debug("No results on page %d", page_num)
+                break
+
+            logger.debug("Found %d projects on page %d", len(page_results), page_num)
+
+            # Filter and collect results
+            for result in page_results:
+                # Early filter on title only (description not available yet)
+                if should_skip_project(result["title"], ""):
+                    logger.debug("Skipping (early filter): %s", result["title"][:50])
+                    continue
+                results.append(result)
+
+            # Navigate to next page
+            if page_num < max_pages:
+                has_next = await self._goto_next_page(page, page_num + 1)
+                if not has_next:
+                    break
+                await asyncio.sleep(1)  # Brief pause between pages
+
+        return results
+
+    def _build_search_url_for_keyword(self, keyword: str) -> str:
+        """Build search URL for a specific keyword.
+
+        Args:
+            keyword: Single search keyword
+
+        Returns:
+            Complete search URL
+        """
+        params = {
+            "projektart": "1",  # Projektbasiert
+            "categories[]": "1",  # IT & Development
+            "query": keyword,
+            "sort": "date",  # Newest first
+        }
+        return f"{self.SEARCH_URL}?{'&'.join(f'{k}={v}' for k, v in params.items())}"
 
     def _build_search_url(self, page: int = 1) -> str:
         """Build search URL with parameters."""
