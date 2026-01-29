@@ -148,10 +148,16 @@ def filter_old_projects(
         logger.info("First run for %s - no date filter applied", portal)
         return raw_projects, 0
 
-    # Normalize to day start for gap-free filtering
-    last_run_day_start = datetime.combine(last_run.date(), datetime.min.time())
-
-    logger.info("Last run for %s: %s (using day start)", portal, last_run_day_start.strftime("%Y-%m-%d"))
+    # TED-spezifische Behandlung: dispatch-date kann mehrere Tage vor Scraping liegen
+    if portal == "ted":
+        # TED API liefert dispatch-date vom EU-Veröffentlichungsdatum
+        # → Nur letzte 14 Tage prüfen statt last_run
+        cutoff = datetime.now() - timedelta(days=14)
+        logger.info("TED portal: using 14-day lookback (cutoff: %s)", cutoff.strftime("%Y-%m-%d"))
+    else:
+        # Normalize to day start for gap-free filtering
+        cutoff = datetime.combine(last_run.date(), datetime.min.time())
+        logger.info("Last run for %s: %s (using day start)", portal, cutoff.strftime("%Y-%m-%d"))
 
     filtered = []
     filtered_count = 0
@@ -162,24 +168,24 @@ def filter_old_projects(
         if published is None:
             # No publication date - keep the project (will be deduped later if exists)
             filtered.append(project)
-        elif published >= last_run_day_start:
-            # Published on or after last run day - keep
+        elif published >= cutoff:
+            # Published on or after cutoff - keep
             filtered.append(project)
         else:
-            # Published before last run day - skip
+            # Published before cutoff - skip
             filtered_count += 1
             logger.debug(
-                "Filtered old project: %s (published %s, last run day %s)",
+                "Filtered old project: %s (published %s, cutoff %s)",
                 project.title[:40],
                 published.strftime("%Y-%m-%d"),
-                last_run_day_start.strftime("%Y-%m-%d"),
+                cutoff.strftime("%Y-%m-%d"),
             )
 
     if filtered_count > 0:
         logger.info(
             "Filtered %d old projects (published before %s)",
             filtered_count,
-            last_run_day_start.strftime("%Y-%m-%d"),
+            cutoff.strftime("%Y-%m-%d"),
         )
 
     return filtered, filtered_count

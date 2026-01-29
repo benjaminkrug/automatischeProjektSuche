@@ -112,6 +112,7 @@ def _has_software_context(text: str) -> bool:
 def should_skip_project(
     title: str,
     description: str = "",
+    cpv_codes: list[str] | None = None,
     check_industry: bool = True,
     require_context: bool = True,
 ) -> bool:
@@ -125,6 +126,7 @@ def should_skip_project(
     Args:
         title: Project title
         description: Project description (optional, may be empty)
+        cpv_codes: CPV codes (optional) - IT codes (72xxx) skip context requirement
         check_industry: Check for industry-reject keywords (Bau, Elektro etc.)
         require_context: Require software/IT context keywords
 
@@ -132,6 +134,12 @@ def should_skip_project(
         True if project should be skipped, False otherwise
     """
     text = f"{title} {description}".lower()
+
+    # Wenn IT-relevante CPV-Codes vorhanden, skip Kontext-Requirement
+    # CPV 72xxx = IT-Dienstleistungen
+    if cpv_codes and any(str(c).startswith("72") for c in cpv_codes):
+        require_context = False
+        logger.debug("IT CPV code found - context requirement skipped")
 
     # 1. Industry-Check (Bau, Elektro etc.)
     # Reject if industry keyword found AND no software context
@@ -187,6 +195,7 @@ def should_skip_project(
 def get_skip_reason(
     title: str,
     description: str = "",
+    cpv_codes: list[str] | None = None,
     check_industry: bool = True,
     require_context: bool = True,
 ) -> str | None:
@@ -195,6 +204,7 @@ def get_skip_reason(
     Args:
         title: Project title
         description: Project description
+        cpv_codes: CPV codes (optional) - IT codes (72xxx) skip context requirement
         check_industry: Check for industry-reject keywords
         require_context: Require software/IT context keywords
 
@@ -202,6 +212,10 @@ def get_skip_reason(
         Reason string if project should be skipped, None otherwise
     """
     text = f"{title} {description}".lower()
+
+    # Wenn IT-relevante CPV-Codes vorhanden, skip Kontext-Requirement
+    if cpv_codes and any(str(c).startswith("72") for c in cpv_codes):
+        require_context = False
 
     # 1. Industry check
     if check_industry:

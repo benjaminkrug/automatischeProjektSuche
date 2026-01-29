@@ -28,10 +28,22 @@ class DtvpScraper(BaseScraper):
     )
 
     # IT-relevant CPV codes with their categories
+    # Erweitert um 48xxx (Softwarepakete) und Web-spezifische Codes
     CPV_CODES = [
+        # 72xxx - IT-Dienstleistungen
         "72200000-7",  # Softwareprogrammierung
         "72400000-4",  # Internetdienste
         "72300000-8",  # Datendienste
+        "72210000-0",  # Programmierung von Softwarepaketen
+        "72230000-6",  # Kundenspezifische Software
+        "72262000-9",  # Softwareentwicklungsdienste
+        "72413000-8",  # Website-Gestaltung
+        "72420000-0",  # Internet-Entwicklungsdienste
+        # 48xxx - Softwarepakete und Informationssysteme
+        "48200000-0",  # Software für Vernetzung/Internet
+        "48400000-2",  # Software für Geschäftstransaktionen
+        "48600000-4",  # Datenbank- und Betriebssoftware
+        "48800000-6",  # Informationssysteme und Server
     ]
 
     # Publication type filter: only open tenders
@@ -106,6 +118,7 @@ class DtvpScraper(BaseScraper):
                             result["title"],
                             result.get("client_name"),
                             result.get("deadline_text"),
+                            cpv_code,  # Pass CPV code for attachment
                         )
                         if project:
                             projects.append(project)
@@ -212,6 +225,7 @@ class DtvpScraper(BaseScraper):
         title: str,
         client_name: Optional[str] = None,
         deadline_text: Optional[str] = None,
+        cpv_code: Optional[str] = None,
     ) -> Optional[RawProject]:
         """Navigate to tender detail page and extract info.
 
@@ -222,6 +236,7 @@ class DtvpScraper(BaseScraper):
             title: Tender title from search results
             client_name: Client name from search results (fallback)
             deadline_text: Deadline text from search results (fallback)
+            cpv_code: CPV code from the search category
 
         Returns:
             RawProject with extracted data, or fallback project on error
@@ -246,7 +261,7 @@ class DtvpScraper(BaseScraper):
                 if any(indicator in project.title for indicator in login_indicators):
                     # Use fallback with search results data
                     return self._create_fallback_project(
-                        external_id, url, title, client_name, deadline_text
+                        external_id, url, title, client_name, deadline_text, cpv_code
                     )
 
                 # Fill in missing data from search results
@@ -259,17 +274,21 @@ class DtvpScraper(BaseScraper):
                     from app.sourcing.dtvp.parser import _parse_datetime
                     project.deadline = _parse_datetime(deadline_text)
 
+                # Attach CPV code from search category
+                if cpv_code and not project.cpv_codes:
+                    project.cpv_codes = [cpv_code.split("-")[0]]  # Remove check digit
+
                 return project
 
             # Fallback if detail parsing fails
             return self._create_fallback_project(
-                external_id, url, title, client_name, deadline_text
+                external_id, url, title, client_name, deadline_text, cpv_code
             )
 
         except Exception as e:
             logger.warning("Error getting details for %s: %s", external_id, e)
             return self._create_fallback_project(
-                external_id, url, title, client_name, deadline_text
+                external_id, url, title, client_name, deadline_text, cpv_code
             )
 
     def _create_fallback_project(
@@ -279,6 +298,7 @@ class DtvpScraper(BaseScraper):
         title: str,
         client_name: Optional[str] = None,
         deadline_text: Optional[str] = None,
+        cpv_code: Optional[str] = None,
     ) -> RawProject:
         """Create a fallback RawProject with minimal data.
 
@@ -288,6 +308,7 @@ class DtvpScraper(BaseScraper):
             title: Tender title
             client_name: Client name if available
             deadline_text: Deadline text if available
+            cpv_code: CPV code from search category
 
         Returns:
             RawProject with available data
@@ -295,6 +316,9 @@ class DtvpScraper(BaseScraper):
         from app.sourcing.dtvp.parser import _parse_datetime
 
         deadline = _parse_datetime(deadline_text) if deadline_text else None
+
+        # Extract CPV code without check digit (e.g., "72200000-7" -> "72200000")
+        cpv_codes = [cpv_code.split("-")[0]] if cpv_code else []
 
         return RawProject(
             source="dtvp",
@@ -304,6 +328,8 @@ class DtvpScraper(BaseScraper):
             client_name=client_name,
             public_sector=True,
             deadline=deadline,
+            project_type="tender",
+            cpv_codes=cpv_codes,
         )
 
     async def _goto_next_page(self, page) -> bool:

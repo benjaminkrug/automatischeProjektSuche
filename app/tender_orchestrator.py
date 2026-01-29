@@ -56,6 +56,18 @@ from app.sourcing.client_db import (
     increment_tender_seen,
 )
 from app.sourcing.normalize import save_projects, filter_old_projects, record_scraper_run
+from app.sourcing.client_enrichment import (
+    enrich_client,
+    get_client_score_modifier,
+)
+from app.sourcing.dedup import dedupe_incoming_projects
+from app.sourcing.metrics import update_metrics_after_scoring
+from app.ai.tender_classifier import (
+    classify_tender,
+    quick_software_check,
+    get_classification_score_modifier,
+    enrich_project_with_classification,
+)
 from app.sourcing.playwright.browser import browser_session
 from app.sourcing.base import extract_cpv_codes
 from app.notifications.email import send_tender_notification
@@ -82,7 +94,7 @@ def _run_async(coro):
         return asyncio.run(coro)
 
 
-# Public sector portal list
+# Public sector portal list (Phase 2 erweitert)
 TENDER_PORTALS = [
     "bund.de",
     "bund_rss",
@@ -91,6 +103,11 @@ TENDER_PORTALS = [
     "evergabe_online",
     "simap",
     "ted",
+    # Phase 2: Neue Portale
+    "oeffentlichevergabe",
+    "nrw",
+    "bayern",
+    "bawue",
 ]
 
 
@@ -116,7 +133,7 @@ class TenderPipelineStats:
         logger.info("TENDER-STATISTIK")
         logger.info(SEPARATOR_LINE)
         logger.info("  Gescraped:        %d", self.scraped)
-        logger.info("  CPV gefiltert:    %d (→ %d durchgelassen)", self.cpv_filtered, self.cpv_passed)
+        logger.info("  CPV gefiltert:    %d (-> %d durchgelassen)", self.cpv_filtered, self.cpv_passed)
         logger.info("  Neue Projekte:    %d", self.new_projects)
         logger.info("  Lose extrahiert:  %d", self.lots_extracted)
         logger.info("  Analysiert:       %d", self.analyzed)
@@ -246,6 +263,11 @@ class TenderOrchestrator:
         from app.sourcing.evergabe_online.scraper import EvergabeOnlineScraper
         from app.sourcing.simap.scraper import SimapScraper
         from app.sourcing.ted.scraper import TedScraper
+        # Phase 2: Neue Scraper
+        from app.sourcing.oeffentlichevergabe.scraper import OeffentlichevergabeScraper
+        from app.sourcing.nrw.scraper import NrwScraper
+        from app.sourcing.bayern.scraper import BayernScraper
+        from app.sourcing.bawue.scraper import BawueScraper
 
         scrapers = [
             ("bund.de", BundScraper()),
@@ -255,6 +277,11 @@ class TenderOrchestrator:
             ("evergabe_online", EvergabeOnlineScraper()),
             ("simap.ch", SimapScraper()),
             ("ted", TedScraper()),
+            # Phase 2: Neue Portale
+            ("oeffentlichevergabe", OeffentlichevergabeScraper()),
+            ("nrw", NrwScraper()),
+            ("bayern", BayernScraper()),
+            ("bawue", BawueScraper()),
         ]
 
         async with browser_session():
@@ -442,11 +469,26 @@ class TenderOrchestrator:
             client = get_or_create_client(self.db, project.client_name)
             increment_tender_seen(self.db, client)
             _, client_data = get_client_for_project(self.db, project)
-            logger.info("  Auftraggeber: %s (Win-Rate: %s)",
-                        project.client_name[:40],
-                        f"{client.win_rate:.0%}" if client.win_rate else "N/A")
+
+            # Phase 2: Client Enrichment
+            known_info = enrich_client(project.client_name)
+            if known_info:
+                client_data["known_client"] = True
+                client_data["tech_affinity"] = known_info.tech_affinity
+                client_data["preferred_stack"] = known_info.preferred_stack
+                client_data["enrichment_score_modifier"] = get_client_score_modifier(project.client_name)
+                logger.info("  Auftraggeber: %s (bekannt, Tech: %s)",
+                            project.client_name[:40],
+                            known_info.tech_affinity)
+            else:
+                client_data["known_client"] = False
+                client_data["enrichment_score_modifier"] = 0
+                logger.info("  Auftraggeber: %s (Win-Rate: %s)",
+                            project.client_name[:40],
+                            f"{client.win_rate:.0%}" if client.win_rate else "N/A")
+
             return client, client_data
-        return None, {"win_rate": None, "tenders_applied": 0, "payment_rating": None}
+        return None, {"win_rate": None, "tenders_applied": 0, "payment_rating": None, "known_client": False, "enrichment_score_modifier": 0}
 
     def _extract_lots(self, project: Project) -> List[TenderLot]:
         """Extract lots from a tender if applicable."""
@@ -498,19 +540,20 @@ class TenderOrchestrator:
             client_win_rate=client_data.get("win_rate"),
             client_tenders_applied=client_data.get("tenders_applied", 0),
             client_payment_rating=client_data.get("payment_rating"),
+            title=lot.lot_title or project.title or "",
         )
 
         lot.score = score_result.normalized
 
         if score_result.skip:
             lot.status = "rejected"
-            logger.info("      → SKIP: %s", score_result.skip_reason)
+            logger.info("      -> SKIP: %s", score_result.skip_reason)
         elif score_result.normalized >= settings.tender_score_threshold_review:
             lot.status = "review"
-            logger.info("      → REVIEW (Score: %d)", score_result.normalized)
+            logger.info("      -> REVIEW (Score: %d)", score_result.normalized)
         else:
             lot.status = "rejected"
-            logger.info("      → REJECT (Score: %d)", score_result.normalized)
+            logger.info("      -> REJECT (Score: %d)", score_result.normalized)
 
         self.db.commit()
 
@@ -547,6 +590,7 @@ class TenderOrchestrator:
             client_tenders_applied=client_data.get("tenders_applied", 0),
             client_payment_rating=client_data.get("payment_rating"),
             cpv_bonus=cpv_bonus,
+            title=project.title or "",
         )
 
         project.score = score_result.normalized
@@ -617,7 +661,7 @@ class TenderOrchestrator:
 
     def _skip_tender(self, project: Project, reason: str) -> None:
         """Skip a tender (blocker found)."""
-        logger.info("  → SKIP: %s", reason)
+        logger.info("  -> SKIP: %s", reason)
 
         rejection = RejectionReason(
             project_id=project.id,
@@ -633,7 +677,7 @@ class TenderOrchestrator:
     def _add_to_review(self, project: Project, score_result: TenderScore) -> None:
         """Add tender to review queue."""
         priority = "high" if score_result.normalized >= settings.tender_score_threshold_review else "normal"
-        logger.info("  → REVIEW (%s, Score: %d)", priority, score_result.normalized)
+        logger.info("  -> REVIEW (%s, Score: %d)", priority, score_result.normalized)
 
         review = ReviewQueue(
             project_id=project.id,
@@ -658,7 +702,7 @@ class TenderOrchestrator:
 
     def _reject_tender(self, project: Project, score_result: TenderScore) -> None:
         """Reject a tender."""
-        logger.info("  → REJECT (Score: %d)", score_result.normalized)
+        logger.info("  -> REJECT (Score: %d)", score_result.normalized)
 
         rejection = RejectionReason(
             project_id=project.id,

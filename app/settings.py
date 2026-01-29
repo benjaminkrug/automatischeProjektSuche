@@ -39,7 +39,7 @@ class Settings(BaseSettings):
 
     # Business rules
     max_active_applications: int = Field(
-        default=8, ge=1, le=50, description="Maximum concurrent applications"
+        default=40, ge=1, le=50, description="Maximum concurrent applications"
     )
     match_threshold_reject: int = Field(
         default=60, ge=0, le=100, description="Score below which projects are rejected"
@@ -83,7 +83,7 @@ class Settings(BaseSettings):
     # Tender Pipeline Settings (Ausschreibungen)
     # ============================================================
     max_active_tenders: int = Field(
-        default=3, ge=1, le=20, description="Maximum concurrent tender applications"
+        default=15, ge=1, le=20, description="Maximum concurrent tender applications"
     )
     tender_budget_min: int = Field(
         default=50000, ge=0, description="Minimum tender budget (EUR)"

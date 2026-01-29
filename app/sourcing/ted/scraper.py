@@ -1,4 +1,9 @@
-"""Scraper for TED (Tenders Electronic Daily) - EU public procurement."""
+"""Scraper for TED (Tenders Electronic Daily) - EU public procurement.
+
+Supports two modes:
+1. API mode (preferred): Uses TED REST API v3 for structured data
+2. Playwright mode (fallback): Scrapes HTML when API unavailable
+"""
 
 import asyncio
 import re
@@ -11,11 +16,15 @@ from app.sourcing.base import BaseScraper, RawProject
 from app.sourcing.early_filter import should_skip_project
 from app.sourcing.playwright.browser import get_browser_manager
 from app.sourcing.ted.parser import parse_search_results, parse_detail_page
+from app.sourcing.ted.api_client import TedApiClient, search_ted_tenders
 
 logger = get_logger("sourcing.ted")
 
 # Filter settings
-PUBLICATION_DATE_RANGE_DAYS = 30  # Only tenders from last 30 days
+PUBLICATION_DATE_RANGE_DAYS = 30
+
+# Whether to use API (preferred) or Playwright (fallback)
+USE_API_MODE = True  # Only tenders from last 30 days
 
 
 class TedScraper(BaseScraper):
@@ -42,6 +51,68 @@ class TedScraper(BaseScraper):
 
     async def scrape(self, max_pages: int = 5) -> List[RawProject]:
         """Scrape IT tenders from TED.
+
+        Uses API mode by default for structured data. Falls back to
+        Playwright scraping if API mode is disabled or fails.
+
+        Args:
+            max_pages: Maximum number of result pages to scrape
+
+        Returns:
+            List of RawProject objects
+        """
+        # Try API mode first (preferred)
+        if USE_API_MODE:
+            try:
+                logger.info("Using TED API v3 mode")
+                projects = await self._scrape_via_api(max_pages)
+                if projects:
+                    return projects
+                logger.warning("TED API returned no results, falling back to Playwright")
+            except Exception as e:
+                logger.warning("TED API failed, falling back to Playwright: %s", e)
+
+        # Fallback to Playwright scraping
+        return await self._scrape_via_playwright(max_pages)
+
+    async def _scrape_via_api(self, max_pages: int) -> List[RawProject]:
+        """Scrape using TED REST API v3.
+
+        Args:
+            max_pages: Used to calculate max_results (pages * 20)
+
+        Returns:
+            List of RawProject objects
+        """
+        max_results = max_pages * 20  # Approximate results per page
+
+        async with TedApiClient() as client:
+            notices = await client.search_it_tenders(
+                country="DE",
+                days_back=PUBLICATION_DATE_RANGE_DAYS,
+                max_results=max_results,
+            )
+
+            projects = []
+            for notice in notices:
+                project = notice.to_raw_project()
+
+                # Apply early filter (pass CPV codes to skip context requirement for IT tenders)
+                if should_skip_project(
+                    project.title,
+                    project.description or "",
+                    cpv_codes=notice.cpv_codes,
+                ):
+                    logger.debug("Skipping (early filter): %s", project.title[:50])
+                    continue
+
+                projects.append(project)
+
+            logger.info("TED API: found %d relevant tenders", len(projects))
+            return projects
+
+    async def _scrape_via_playwright(self, max_pages: int) -> List[RawProject]:
+        """Original Playwright-based scraping (fallback).
 
         Args:
             max_pages: Maximum number of result pages to scrape

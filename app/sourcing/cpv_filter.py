@@ -17,6 +17,7 @@ logger = get_logger("sourcing.cpv_filter")
 
 # Relevante CPV-Codes für Web/Mobile-Entwicklung
 RELEVANT_CPV_CODES = {
+    # === 72xxx Softwareentwicklung (bestehend) ===
     "72200000": "Softwareprogrammierung und -beratung",
     "72210000": "Programmierung von Softwarepaketen",
     "72211000": "Programmierung von System- und Anwendersoftware",
@@ -32,18 +33,44 @@ RELEVANT_CPV_CODES = {
     "72414000": "Suchmaschinen für Datenabfrage",
     "72415000": "Hosting für Website-Betrieb",
     "72416000": "Application Service Provider",
+    # === 72xxx Internet & Web (neu) ===
+    "72400000": "Internetdienste",
+    "72420000": "Internet-Entwicklungsdienste",
+    "72421000": "Internet/Intranet-Client-Anwendungsentwicklung",
+    "72422000": "Internet/Intranet-Server-Anwendungsentwicklung",
+    # === 72xxx Beratung & Analyse (neu) ===
+    "72220000": "Systemberatung und technische Beratung",
+    "72222000": "Beratung im Bereich Informationstechnologie",
+    "72222300": "IT-Beratungsdienste",
+    "72227000": "Beratung im Bereich Software-Integration",
+    "72240000": "Systemanalyse und Programmierung",
+    # === 72xxx Software-Lifecycle (neu) ===
+    "72263000": "Software-Implementierung",
+    "72254000": "Softwaretest",
+    "72265000": "Software-Konfiguration",
+    "72266000": "Software-Beratung",
+    "72267000": "Software-Wartung und -Reparatur",
+    "72320000": "Datenbankdienste",
+    # === 48xxx Softwarepakete & Systeme (neu) ===
+    "48200000": "Software für Vernetzung, Internet und Intranet",
+    "48220000": "Internet-Softwarepaket",
+    "48400000": "Software für Geschäftstransaktionen",
+    "48500000": "Kommunikations- und Multimedia-Software",
+    "48600000": "Datenbank- und Betriebssoftware",
+    "48610000": "Datenbanksysteme",
+    "48700000": "Softwarepaket-Dienstprogramme",
+    "48800000": "Informationssysteme und Server",
+    "48810000": "Informationssysteme",
 }
 
 # Ausschluss-CPV-Codes (Hardware, SAP, Lizenzen, etc.)
+# Note: Don't exclude too aggressively - let text analysis decide
+# 48000000 entfernt - zu breit, relevante Untercodes sind jetzt in RELEVANT
 EXCLUDED_CPV_CODES = {
-    "48000000": "Softwarepaket und Informationssysteme",  # Lizenzverkauf
-    "72220000": "Systemanalyse",  # Nur Beratung
-    "72240000": "Systemanalyse und Programmierung",  # Zu breit
     "30200000": "Computeranlagen und Zubehör",  # Hardware
     "32000000": "Rundfunk- und Fernsehgeräte",  # Hardware
     "48100000": "Branchenspezifisches Softwarepaket",  # Meist SAP etc.
     "72253000": "Helpdesk und Unterstützungsdienste",  # Support
-    "72300000": "Datendienste",  # Hosting, nicht Entwicklung
 }
 
 # Bonus-CPV-Codes (besonders relevant)
@@ -52,6 +79,12 @@ BONUS_CPV_CODES = {
     "72413000": 8,   # Website-Gestaltung
     "72230000": 5,   # Kundenspezifische Software
     "72262000": 5,   # Softwareentwicklungsdienste
+    # Neue Bonus-Codes
+    "72420000": 10,  # Internet-Entwicklungsdienste
+    "72421000": 8,   # Client-Entwicklung
+    "72422000": 8,   # Server-Entwicklung
+    "48220000": 5,   # Internet-Softwarepaket
+    "48810000": 5,   # Informationssysteme
 }
 
 
@@ -90,6 +123,12 @@ CPV_HIERARCHY_PREFIXES = {
     "7221": "Anwendersoftware",             # Anwendungsentwicklung
     "7226": "Softwaredienstleistungen",     # Software-Services
     "7241": "Webdienste",                   # Web-Services
+    # Neue Hierarchie-Prefixe
+    "724": "Internetdienste",               # Internet-Services
+    "7242": "Internet-Entwicklung",         # Internet-Entwicklung
+    "482": "Internet/Netzwerk-Software",    # Netzwerk-Software
+    "486": "Datenbank-Software",            # Datenbank-Software
+    "488": "Informationssysteme",           # Informationssysteme
 }
 
 
@@ -136,10 +175,17 @@ def passes_cpv_filter(
         # Text-basierter Fallback statt Bypass
         text = f"{title} {description}".lower()
         software_keywords = [
+            # Bestehend
             "software", "entwicklung", "webapp", "portal",
             "anwendung", "plattform", "app", "webentwicklung",
             "programmierung", "it-system", "digitalisierung",
             "webanwendung", "applikation", "fachverfahren",
+            # === NEU ===
+            "informationssystem", "datenbank", "schnittstelle",
+            "api", "backend", "frontend", "cloud", "saas",
+            "e-government", "onlinedienst", "serviceportal",
+            "digitale lösung", "it-dienstleistung", "softwarelösung",
+            "individualsoftware", "branchensoftware", "fachanwendung",
         ]
         if any(kw in text for kw in software_keywords):
             return CpvFilterResult(

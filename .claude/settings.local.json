@@ -47,7 +47,26 @@
       "WebFetch(domain:www.freelancermap.de)",
       "Bash(PYTHONPATH=\"C:\\\\Users\\\\krugb\\\\OneDrive\\\\Desktop\\\\GMBH\\\\Projekte\\\\gruppenprojekte\\\\private-projekte\\\\automatischeProjektSuche\" python:*)",
       "Bash(venvScriptspython.exe -m pytest tests/ -v --tb=short)",
-      "Bash(\"venv\\\\Scripts\\\\python.exe\" -m pytest tests/ -v --tb=short)"
+      "Bash(\"venv\\\\Scripts\\\\python.exe\" -m pytest tests/ -v --tb=short)",
+      "WebFetch(domain:docs.ted.europa.eu)",
+      "Bash(venvScriptsactivate)",
+      "Bash(\"venv\\\\Scripts\\\\python.exe\" -c \"from app.sourcing.ted.api_client import TedApiClient, search_ted_tenders; print\\(''TED API Client: OK''\\)\")",
+      "Bash(\"venv\\\\Scripts\\\\python.exe\" -c \"from app.sourcing.oeffentlichevergabe import OeffentlichevergabeScraper; print\\(''Oeffentlichevergabe: OK''\\)\")",
+      "Bash(\"venv\\\\Scripts\\\\python.exe\" -c \"from app.sourcing.dedup import find_cross_source_duplicates, jaccard_similarity; print\\(''Dedup: OK''\\)\")",
+      "Bash(\"venv\\\\Scripts\\\\python.exe\" -c \"from app.sourcing.nrw import NrwScraper; print\\(''NRW: OK''\\)\")",
+      "Bash(\"venv\\\\Scripts\\\\python.exe\" -c \"from app.sourcing.bayern import BayernScraper; print\\(''Bayern: OK''\\)\")",
+      "Bash(\"venv\\\\Scripts\\\\python.exe\" -c \"from app.sourcing.bawue import BawueScraper; print\\(''BaWue: OK''\\)\")",
+      "Bash(\"venv\\\\Scripts\\\\python.exe\" -c \"from app.sourcing.bund_rss.scraper import BundRssScraper; s = BundRssScraper\\(\\); print\\(f''Bund RSS Feed URLs: {len\\(s.FEED_URLS\\)} feeds''\\)\")",
+      "Bash(\"venv\\\\Scripts\\\\python.exe\" -c \"from app.sourcing.metrics import get_scraper_metrics, ScraperMetrics; print\\(''Metrics: OK''\\)\")",
+      "Bash(\"venv\\\\Scripts\\\\python.exe\" -c \"from app.ai.tender_classifier import classify_tender, quick_software_check; print\\(''Tender Classifier: OK''\\)\")",
+      "Bash(\"venv\\\\Scripts\\\\python.exe\":*)",
+      "Bash(\"venv\\\\Scripts\\\\python.exe\" -c \"from app.sourcing.search_config import PORTAL_CONFIGS; print\\(f''Portal Configs: {len\\(PORTAL_CONFIGS\\)} portals''\\)\")",
+      "Bash(\"venv\\\\Scripts\\\\python.exe\" -c \"from app.sourcing.ted.scraper import TedScraper; from app.sourcing.ted.api_client import TedApiClient; print\\(''TED imports OK''\\)\")",
+      "Bash(\"venv\\\\Scripts\\\\python.exe\" -m app.tender_orchestrator)",
+      "Bash(\"venv\\\\Scripts\\\\python.exe\" -c \"from app.tender_orchestrator import TenderOrchestrator; print\\(''Import OK''\\)\")",
+      "Bash(\"venv\\\\Scripts\\\\python.exe\" scripts/reset_tenders.py --dry-run)",
+      "WebFetch(domain:api.ted.europa.eu)",
+      "WebFetch(domain:ted.europa.eu)"
     ]
   }
 }

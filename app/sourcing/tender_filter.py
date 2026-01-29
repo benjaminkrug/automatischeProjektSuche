@@ -157,6 +157,21 @@ WEBAPP_PATTERNS = [
     rf"anwendungs[- ]?{FUZZY_ENTWICKLUNG}",
     rf"portal[- ]?{FUZZY_ENTWICKLUNG}",
     rf"plattform[- ]?{FUZZY_ENTWICKLUNG}",
+    # === NEU: Cloud & Plattform ===
+    rf"plattform[- ]?(?:{FUZZY_ENTWICKLUNG}|konzept|lösung)",
+    r"digitale?\s+(?:lösung|plattform|anwendung)",
+    r"cloud[- ]?(?:lösung|anwendung|system|basiert)",
+    r"saas[- ]?(?:lösung|anwendung|plattform)",
+    # === NEU: Informationssysteme ===
+    r"informations?system.*(?:web|online|cloud|browser)",
+    r"(?:fach|verwaltungs|management)[- ]?system.*(?:web|online)",
+    # === NEU: Portale ===
+    r"(?:behörden|service|bürger|kunden|mitarbeiter)[- ]?portal",
+    r"self[- ]?service[- ]?portal",
+    # === NEU: Digitalisierung ===
+    r"digitalisierung.*(?:prozess|verwaltung|service)",
+    r"e[- ]?government",
+    r"(?:web|browser)[- ]?basiert(?:e|es)?\s+(?:anwendung|system|lösung)",
 ]
 
 # Mobile App-Indikatoren (explizite Forderung)
@@ -525,6 +540,38 @@ _BUDGET_PATTERNS = [
         r"(\d{1,3}(?:,\d{1,2})?)\s*(?:Mio\.?|Million(?:en)?)\s*(?:EUR|€|Euro)?",
         re.IGNORECASE,
     ),
+    # === NEU: Alternative Begriffe ===
+    # geschätzter Wert: 100.000 EUR
+    re.compile(
+        r"geschätzter?\s+(?:wert|preis|umfang)[:\s]*" + _DE_NUMBER + r"\s*(?:EUR|€|Euro)?",
+        re.IGNORECASE,
+    ),
+    # Gesamtwert/Auftragswert: 100.000 EUR
+    re.compile(
+        r"(?:gesamt|auftrags?)[- ]?wert[:\s]*" + _DE_NUMBER + r"\s*(?:EUR|€|Euro)?",
+        re.IGNORECASE,
+    ),
+    # Netto/Brutto-Preis: 100.000 EUR
+    re.compile(
+        r"(?:netto|brutto)[- ]?(?:preis|wert|summe)[:\s]*" + _DE_NUMBER + r"\s*(?:EUR|€|Euro)?",
+        re.IGNORECASE,
+    ),
+    # Volumen: 100.000 EUR
+    re.compile(
+        r"(?:auftrags?)?volumen[:\s]*" + _DE_NUMBER + r"\s*(?:EUR|€|Euro)?",
+        re.IGNORECASE,
+    ),
+    # Investitionssumme: 100.000 EUR
+    re.compile(
+        r"investitions?(?:summe|volumen)[:\s]*" + _DE_NUMBER + r"\s*(?:EUR|€|Euro)?",
+        re.IGNORECASE,
+    ),
+    # === NEU: Kurzformen ===
+    # "150k EUR" or "150 Tsd. EUR"
+    re.compile(
+        r"(\d+(?:[.,]\d+)?)\s*(?:k|tsd\.?)\s*(?:EUR|€|Euro)",
+        re.IGNORECASE,
+    ),
 ]
 
 
@@ -535,6 +582,9 @@ def extract_budget_from_text(text: str) -> Optional[int]:
     - "50.000 bis 250.000 EUR" (returns max)
     - "100.000,00 €"
     - "1,5 Mio. EUR"
+    - "geschätzter Wert: 100.000 EUR"
+    - "Gesamtwert: 100.000 EUR"
+    - "150k EUR" or "150 Tsd. EUR"
 
     Returns:
         Budget in EUR as integer, or None if not found.
@@ -542,23 +592,36 @@ def extract_budget_from_text(text: str) -> Optional[int]:
     if not text:
         return None
 
-    # Range pattern (return max value)
+    # Range pattern (return max value) - Index 0
     match = _BUDGET_PATTERNS[0].search(text)
     if match:
         max_val = match.group(2).replace(".", "").replace(",", ".")
         return int(float(max_val))
 
-    # Single value
+    # Single value - Index 1
     match = _BUDGET_PATTERNS[1].search(text)
     if match:
         val = match.group(1).replace(".", "").replace(",", ".")
         return int(float(val))
 
-    # Mio format
+    # Mio format - Index 2
     match = _BUDGET_PATTERNS[2].search(text)
     if match:
         val = float(match.group(1).replace(",", "."))
         return int(val * 1_000_000)
+
+    # Kurzform (k/Tsd.) - Index 8 (letztes Pattern)
+    match = _BUDGET_PATTERNS[8].search(text)
+    if match:
+        val = float(match.group(1).replace(",", "."))
+        return int(val * 1_000)
+
+    # Alternative Begriffe (geschätzter Wert, Gesamtwert, etc.) - Index 3-7
+    for i in range(3, 8):
+        match = _BUDGET_PATTERNS[i].search(text)
+        if match:
+            val = match.group(1).replace(".", "").replace(",", ".")
+            return int(float(val))
 
     return None
 
@@ -633,6 +696,7 @@ def score_tender(
     client_tenders_applied: int = 0,
     client_payment_rating: Optional[int] = None,
     cpv_bonus: int = 0,
+    title: str = "",
 ) -> TenderScore:
     """Calculate comprehensive tender score.
 
@@ -646,12 +710,13 @@ def score_tender(
         client_tenders_applied: Number of previous applications
         client_payment_rating: Payment rating (1-5)
         cpv_bonus: Bonus from CPV code filter
+        title: Project title (used for software fallback detection)
 
     Returns:
         TenderScore with detailed breakdown
     """
     score = TenderScore()
-    combined_text = f"{description} {pdf_text}"
+    combined_text = f"{title} {description} {pdf_text}"
 
     # ============================================================
     # TECH-FIT (40 Punkte) - HÖCHSTE GEWICHTUNG
@@ -659,11 +724,11 @@ def score_tender(
     tech_result = analyze_tech_requirements(description, pdf_text)
 
     if tech_result.requires_webapp:
-        score.tech_score += 20
+        score.tech_score += 75  # Erhöht: garantiert Review-Queue
         score.reasons.append(f"Webanwendung: {tech_result.webapp_evidence}")
 
     if tech_result.requires_mobile:
-        score.tech_score += 20
+        score.tech_score += 75  # Erhöht: garantiert Review-Queue
         score.reasons.append(f"Mobile App: {tech_result.mobile_evidence}")
 
     # Tech-Stack bonus
@@ -672,41 +737,48 @@ def score_tender(
         score.tech_score += stack_bonus
         score.reasons.append(f"Tech-Stack: {', '.join(tech_result.tech_stack_matches[:5])}")
 
-    # EARLY EXIT: No tech fit = not relevant
+    # EARLY EXIT: No tech fit = check for software fallback
     if not tech_result.requires_webapp and not tech_result.requires_mobile:
-        score.skip = True
-        score.skip_reason = "Keine Web/Mobile-Entwicklung gefordert"
-        return score
+        # Fallback: Prüfe ob generische Software-Keywords vorhanden
+        software_fallback_keywords = [
+            # Generisch (matcht "Software für...", "Softwarelösung", etc.)
+            "software",
+            # Spezifisch
+            "anwendungsentwicklung", "applikation",
+            "digitale lösung", "it-system", "fachverfahren", "individualsoftware",
+            "fachanwendung", "it-dienstleistung", "management-system",
+            "informationssystem", "dokumentation", "plattform",
+        ]
+        combined_lower = combined_text.lower()
+        has_software_hint = any(kw in combined_lower for kw in software_fallback_keywords)
+
+        if not has_software_hint:
+            score.skip = True
+            score.skip_reason = "Keine Web/Mobile-Entwicklung gefordert"
+            return score
+        else:
+            # Nicht skippen, aber Score reduzieren
+            score.reasons.append("Tech-Fit unklar - Software-Keywords gefunden")
+            score.tech_score = 5  # Minimaler Tech-Score statt 0
 
     # ============================================================
-    # VOLUMEN (15 Punkte)
+    # VOLUMEN (DEAKTIVIERT - nicht relevant für erste Sichtung)
     # ============================================================
-    # Fallback: Budget aus Beschreibungstext extrahieren
+    # Budget wird nur noch informativ angezeigt, fließt aber nicht in Score ein
     if not budget_max:
         budget_max = extract_budget_from_text(combined_text)
-        if budget_max:
-            score.reasons.append(f"Budget aus Text: {budget_max:,}€")
-
     if budget_max:
-        if settings.tender_budget_min <= budget_max <= settings.tender_budget_max:
-            score.volume_score = 15
-            score.reasons.append(f"Budget optimal: {budget_max:,}€")
-        elif budget_max > settings.tender_budget_max:
-            score.volume_score = 10
-            score.reasons.append(f"Großprojekt: {budget_max:,}€")
-        else:
-            score.volume_score = 5
-            score.reasons.append(f"Kleineres Projekt: {budget_max:,}€")
+        score.reasons.append(f"Budget (Info): {budget_max:,}€")
+    # score.volume_score bleibt 0
 
     # ============================================================
-    # VERGABEART (15 Punkte)
+    # VERGABEART (DEAKTIVIERT - nicht relevant für erste Sichtung)
     # ============================================================
+    # Vergabeart wird nur noch informativ angezeigt
     procedure = detect_procedure_type(combined_text)
-    score.procedure_score = score_procedure_type(procedure)
-    if score.procedure_score > 0:
-        score.reasons.append(f"Vergabeart günstig: {procedure}")
-    elif score.procedure_score < 0:
-        score.reasons.append(f"Vergabeart ungünstig: {procedure}")
+    if procedure != "unknown":
+        score.reasons.append(f"Vergabeart (Info): {procedure}")
+    # score.procedure_score bleibt 0
 
     # ============================================================
     # ZUSCHLAGSKRITERIEN (10 Punkte)
@@ -813,11 +885,11 @@ def score_tender(
     )
 
     # Normalize to 0-100
-    # Max theoretical: Tech 50 + Volume 15 + Procedure 15 + Award 10 +
-    #                  Eligibility 15 + Accessibility 5 + Security 0 +
-    #                  Consortium 10 + Client 15 + Deadline 10 = 145
+    # Vereinfacht: Tech 150 (max Web+Mobile) + Stack 10 + Eligibility 15 +
+    #              Accessibility 5 + Consortium 10 + Client 15 + Deadline 10 = 215
     # Plus potential CPV bonus (up to 10)
-    max_score = 155
+    # Aber: Tech allein (75) soll schon ~70% ergeben → max_score = 100
+    max_score = 100
     score.normalized = min(100, int((score.total / max_score) * 100))
 
     return score

@@ -74,6 +74,22 @@ PORTAL_CONFIGS: Dict[str, PortalSearchConfig] = {
     "evergabe_online": PortalSearchConfig(
         enabled=True,  # Öffentliche Suche verfügbar
     ),
+    # oeffentlichevergabe.de - OpenData API with 600+ Vergabestellen
+    "oeffentlichevergabe": PortalSearchConfig(
+        enabled=False,  # API endpoint not yet verified - disabled until fixed
+    ),
+    # NRW Vergabeportal - bevölkerungsreichstes Bundesland
+    "nrw": PortalSearchConfig(
+        enabled=False,  # Playwright selectors need adjustment - disabled until fixed
+    ),
+    # Bayern Vergabeportal - starker Tech-Sektor
+    "bayern": PortalSearchConfig(
+        enabled=False,  # Playwright selectors need adjustment - disabled until fixed
+    ),
+    # Baden-Württemberg Vergabeportal - IT/Automotive
+    "bawue": PortalSearchConfig(
+        enabled=False,  # Playwright selectors need adjustment - disabled until fixed
+    ),
 }
 
 
@@ -211,6 +227,11 @@ REQUIRED_CONTEXT_KEYWORDS: List[str] = [
     "angular", "node", "django", "spring", "docker", "kubernetes",
     # IT-Beratung
     "it-beratung", "systemintegration", "softwarearchitektur",
+    # Allgemeinere Begriffe (oft in Ausschreibungen)
+    "beratungsleistung",  # Häufig bei IT-Beratung
+    "dienstleistung",     # Oft IT-Kontext bei Vergaben
+    "system",             # IT-System, Informationssystem
+    "portal",             # Bürgerportal, Serviceportal
 ]
 
 

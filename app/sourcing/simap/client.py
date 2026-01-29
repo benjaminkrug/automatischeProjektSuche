@@ -20,12 +20,22 @@ class SimapApiClient:
     BASE_URL = "https://www.simap.ch/api/publications/v2"
     SEARCH_ENDPOINT = "/project/project-search"
 
-    # IT-related CPV codes
+    # IT-related CPV codes (72xxx + 48xxx)
     DEFAULT_CPV_CODES = [
+        # 72xxx - IT-Dienstleistungen
         "72000000",  # IT services
         "72200000",  # Software programming and consultancy
         "72400000",  # Internet services
         "72500000",  # Computer-related services
+        "72230000",  # Custom software development
+        "72262000",  # Software development services
+        "72413000",  # Website design
+        "72420000",  # Internet development services
+        # 48xxx - Softwarepakete und Informationssysteme
+        "48200000",  # Networking, Internet and intranet software
+        "48400000",  # Business transaction software
+        "48600000",  # Database and operating software
+        "48800000",  # Information systems and servers
     ]
 
     def __init__(

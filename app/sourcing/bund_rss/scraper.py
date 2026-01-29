@@ -1,6 +1,10 @@
-"""Scraper for service.bund.de RSS feed (Ausschreibungen)."""
+"""Scraper for service.bund.de RSS feed (Ausschreibungen).
 
-from typing import List
+Supports multiple IT-keyword-filtered RSS feeds for better coverage
+of relevant software/IT tenders.
+"""
+
+from typing import List, Set
 
 import feedparser
 
@@ -11,11 +15,30 @@ from app.sourcing.bund_rss.parser import parse_rss_entry
 
 logger = get_logger("sourcing.bund_rss")
 
-# RSS Feed URL for Ausschreibungen
-RSS_FEED_URL = "https://www.service.bund.de/Content/Globals/Functions/RSSFeed/RSSGenerator_Ausschreibungen.xml"
+# Base RSS Feed URL (all tenders)
+RSS_FEED_BASE = "https://www.service.bund.de/Content/Globals/Functions/RSSFeed/RSSGenerator_Ausschreibungen.xml"
 
-# Limit entries per run
-MAX_ENTRIES_PER_RUN = 50
+# IT-keyword-filtered RSS Feed URLs
+# service.bund.de allows search parameter 'q' in RSS URL
+RSS_FEED_URLS = [
+    # Base feed (all tenders)
+    RSS_FEED_BASE,
+    # IT-specific keyword feeds
+    f"{RSS_FEED_BASE}?q=Software",
+    f"{RSS_FEED_BASE}?q=IT-Entwicklung",
+    f"{RSS_FEED_BASE}?q=Webanwendung",
+    f"{RSS_FEED_BASE}?q=Softwareentwicklung",
+    f"{RSS_FEED_BASE}?q=Programmierung",
+    f"{RSS_FEED_BASE}?q=Webportal",
+    f"{RSS_FEED_BASE}?q=Digitalisierung",
+    f"{RSS_FEED_BASE}?q=IT-Dienstleistung",
+]
+
+# Limit entries per feed
+MAX_ENTRIES_PER_FEED = 30
+
+# Total limit across all feeds
+MAX_ENTRIES_TOTAL = 100
 
 
 class BundRssScraper(BaseScraper):
@@ -34,59 +57,90 @@ class BundRssScraper(BaseScraper):
     def is_public_sector(self) -> bool:
         return True
 
+    @property
+    def FEED_URLS(self) -> List[str]:
+        """Get list of RSS feed URLs.
+
+        Returns:
+            List of RSS feed URLs including keyword-filtered feeds
+        """
+        return RSS_FEED_URLS
+
     async def scrape(self, max_pages: int = 1) -> List[RawProject]:
-        """Fetch and parse RSS feed.
+        """Fetch and parse multiple RSS feeds.
+
+        Fetches both the base feed and IT-keyword-filtered feeds
+        for better coverage of relevant tenders.
 
         Args:
-            max_pages: Ignored for RSS (single feed)
+            max_pages: Number of keyword feeds to include (1 = base only)
 
         Returns:
             List of RawProject objects
         """
         projects = []
+        seen_ids: Set[str] = set()  # Deduplicate across feeds
 
-        logger.info("Fetching RSS feed from %s", RSS_FEED_URL)
+        # Determine which feeds to use
+        feeds_to_use = RSS_FEED_URLS[:max_pages] if max_pages > 0 else RSS_FEED_URLS
 
-        try:
-            feed = feedparser.parse(RSS_FEED_URL)
-        except Exception as e:
-            logger.error("Error fetching RSS feed: %s", e)
-            return projects
+        for feed_url in feeds_to_use:
+            logger.debug("Fetching RSS feed from %s", feed_url)
 
-        if feed.bozo and feed.bozo_exception:
-            logger.warning("RSS feed parsing issue: %s", feed.bozo_exception)
-
-        if not feed.entries:
-            logger.warning("No entries in RSS feed")
-            return projects
-
-        logger.info("RSS feed contains %d entries", len(feed.entries))
-
-        # Process entries
-        for i, entry in enumerate(feed.entries[:MAX_ENTRIES_PER_RUN]):
             try:
-                project = parse_rss_entry(entry)
-
-                if not project:
-                    continue
-
-                # Apply early filter
-                if should_skip_project(project.title, project.description or ""):
-                    logger.debug("Skipping (early filter): %s", project.title[:50])
-                    continue
-
-                projects.append(project)
-                logger.debug(
-                    "Parsed entry %d: %s",
-                    i + 1,
-                    project.title[:50],
-                )
-
+                feed = feedparser.parse(feed_url)
             except Exception as e:
-                logger.warning("Error parsing entry %d: %s", i, e)
+                logger.warning("Error fetching RSS feed %s: %s", feed_url, e)
                 continue
 
-        logger.info("Parsed %d IT-relevant projects from RSS feed", len(projects))
+            if feed.bozo and feed.bozo_exception:
+                logger.debug("RSS feed parsing issue: %s", feed.bozo_exception)
+
+            if not feed.entries:
+                logger.debug("No entries in RSS feed: %s", feed_url)
+                continue
+
+            entries_added = 0
+
+            for entry in feed.entries[:MAX_ENTRIES_PER_FEED]:
+                try:
+                    project = parse_rss_entry(entry)
+
+                    if not project:
+                        continue
+
+                    # Skip duplicates (same tender in multiple keyword feeds)
+                    if project.external_id in seen_ids:
+                        continue
+                    seen_ids.add(project.external_id)
+
+                    # Apply early filter
+                    if should_skip_project(project.title, project.description or ""):
+                        logger.debug("Skipping (early filter): %s", project.title[:50])
+                        continue
+
+                    projects.append(project)
+                    entries_added += 1
+
+                    # Stop if total limit reached
+                    if len(projects) >= MAX_ENTRIES_TOTAL:
+                        break
+
+                except Exception as e:
+                    logger.debug("Error parsing entry: %s", e)
+                    continue
+
+            logger.debug("Added %d projects from feed: %s", entries_added, feed_url.split("?")[-1][:30])
+
+            # Stop if total limit reached
+            if len(projects) >= MAX_ENTRIES_TOTAL:
+                break
+
+        logger.info(
+            "Parsed %d unique projects from %d RSS feeds",
+            len(projects),
+            len(feeds_to_use),
+        )
         return projects
 
 
