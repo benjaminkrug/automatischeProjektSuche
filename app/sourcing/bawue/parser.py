@@ -13,6 +13,16 @@ logger = get_logger("sourcing.bawue.parser")
 async def parse_search_results(page) -> List[dict]:
     """Parse search results page into raw data dictionaries.
 
+    BaWü portal structure (table columns):
+    0. Erschienen am (publication date)
+    1. Ausschreibung (title)
+    2. Vergabestelle (client)
+    3. Verfahrensart (procedure type)
+    4. Rechtsrahmen (legal framework)
+    5. Abgabefrist (deadline)
+
+    Note: Table cells have NO links - data is display-only.
+
     Args:
         page: Playwright page object
 
@@ -22,36 +32,29 @@ async def parse_search_results(page) -> List[dict]:
     results = []
 
     try:
-        # Wait for results to load
-        await page.wait_for_selector(
-            "table, .tender-list, .search-results, .result-container",
-            timeout=10000,
-        )
+        # Wait for table to load
+        await page.wait_for_selector("table tbody tr, table tr", timeout=15000)
 
-        # Try multiple selectors
-        selectors = [
-            "table.results tbody tr",
-            ".tender-item",
-            ".search-result-item",
-            ".vergabe-item",
-            ".ausschreibung-item",
-            "[data-tender-id]",
-        ]
+        # Get all table rows
+        rows = await page.query_selector_all("table tbody tr, table tr")
+        logger.debug("Found %d table rows", len(rows))
 
-        items = []
-        for selector in selectors:
-            items = await page.query_selector_all(selector)
-            if items:
-                logger.debug("Found %d results with selector: %s", len(items), selector)
-                break
+        for row in rows:
+            # Skip header rows
+            th = await row.query_selector("th")
+            if th:
+                continue
 
-        for item in items:
+            cells = await row.query_selector_all("td")
+            if len(cells) < 3:
+                continue
+
             try:
-                data = await _parse_result_item(item)
+                data = await _parse_table_row(cells)
                 if data and data.get("title"):
                     results.append(data)
             except Exception as e:
-                logger.debug("Error parsing result item: %s", e)
+                logger.debug("Error parsing row: %s", e)
                 continue
 
     except Exception as e:
@@ -60,8 +63,57 @@ async def parse_search_results(page) -> List[dict]:
     return results
 
 
+async def _parse_table_row(cells) -> Optional[dict]:
+    """Parse a table row from BaWü portal.
+
+    Columns:
+    0. Erschienen am (publication date)
+    1. Ausschreibung (title)
+    2. Vergabestelle (client)
+    3. Verfahrensart (procedure type)
+    4. Rechtsrahmen (legal framework)
+    5. Abgabefrist (deadline)
+
+    Args:
+        cells: List of td elements
+
+    Returns:
+        Dictionary with tender data or None
+    """
+    data = {}
+
+    # Cell 0: Publication date
+    if len(cells) >= 1:
+        date_text = (await cells[0].inner_text()).strip()
+        data["published_at"] = _parse_date(date_text)
+
+    # Cell 1: Title (Ausschreibung)
+    if len(cells) >= 2:
+        title = (await cells[1].inner_text()).strip()
+        data["title"] = title
+
+    # Cell 2: Client (Vergabestelle)
+    if len(cells) >= 3:
+        client = (await cells[2].inner_text()).strip()
+        data["client_name"] = client
+
+    # Cell 5: Deadline (Abgabefrist)
+    if len(cells) >= 6:
+        deadline_text = (await cells[5].inner_text()).strip()
+        data["deadline"] = _parse_date(deadline_text)
+
+    # Generate external_id from title (no links available)
+    if data.get("title"):
+        import hashlib
+        data["external_id"] = f"bawue_{hashlib.md5(data['title'].encode()).hexdigest()[:12]}"
+        # No detail URL available - use search page
+        data["url"] = "https://vergabe.landbw.de/NetServer/PublicationSearchControllerServlet"
+
+    return data if data.get("title") else None
+
+
 async def _parse_result_item(item) -> Optional[dict]:
-    """Parse a single search result item.
+    """Parse a single search result item (fallback for table format).
 
     Args:
         item: Playwright element handle
@@ -84,7 +136,11 @@ async def _parse_result_item(item) -> Optional[dict]:
                 data["title"] = text
                 href = await link.get_attribute("href")
                 if href:
-                    data["url"] = href
+                    data["url"] = href if href.startswith("http") else f"https://vergabe.landbw.de{href}"
+                    # Try to extract TenderOID
+                    oid_match = re.search(r"TenderOID=([A-Za-z0-9_-]+)", href)
+                    if oid_match:
+                        data["external_id"] = oid_match.group(1)
                 continue
 
             # Check for ID pattern
@@ -102,14 +158,20 @@ async def _parse_result_item(item) -> Optional[dict]:
 
     else:
         # Non-table format
-        title_el = await item.query_selector(
-            "h3, h4, .title, .tender-title, a.result-link, .ausschreibung-titel"
-        )
-        if title_el:
-            data["title"] = (await title_el.inner_text()).strip()
-            href = await title_el.get_attribute("href")
-            if href:
-                data["url"] = href
+        title_selectors = [
+            "h3 a", "h4 a", "h3", "h4",
+            ".title", ".tender-title",
+            "a.result-link", ".ausschreibung-titel",
+        ]
+        for selector in title_selectors:
+            title_el = await item.query_selector(selector)
+            if title_el:
+                data["title"] = (await title_el.inner_text()).strip()
+                href = await title_el.get_attribute("href")
+                if href:
+                    data["url"] = href if href.startswith("http") else f"https://vergabe.landbw.de{href}"
+                if data["title"]:
+                    break
 
         id_el = await item.query_selector(".tender-id, .reference-number, .vergabe-nr")
         if id_el:
@@ -129,9 +191,14 @@ async def _parse_result_item(item) -> Optional[dict]:
 
     # Extract ID from URL if missing
     if not data.get("external_id") and data.get("url"):
-        match = re.search(r"(?:id|oid|tender|vergabe)=(\d+)|/(\d+)(?:\?|$)", data["url"])
+        match = re.search(r"TenderOID=([A-Za-z0-9_-]+)|(?:id|oid|tender|vergabe)=(\d+)", data["url"])
         if match:
             data["external_id"] = match.group(1) or match.group(2)
+
+    # Generate ID from title if still missing
+    if not data.get("external_id") and data.get("title"):
+        import hashlib
+        data["external_id"] = f"bawue_{hashlib.md5(data['title'].encode()).hexdigest()[:12]}"
 
     return data if data.get("title") else None
 

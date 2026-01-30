@@ -5,6 +5,7 @@ Uses Playwright for dynamic content rendering.
 """
 
 import asyncio
+import re
 from datetime import datetime
 from typing import List, Optional
 from urllib.parse import urljoin
@@ -26,8 +27,8 @@ class BawueScraper(BaseScraper):
 
     BASE_URL = "https://vergabe.landbw.de"
 
-    # Search URL - actual path may vary
-    SEARCH_URL = f"{BASE_URL}/NetServer/PublicationSearchControllerServlet"
+    # Search URL - Ausschreibungen (InvitationToTender), alle Rechtsrahmen
+    SEARCH_URL = f"{BASE_URL}/NetServer/PublicationSearchControllerServlet?function=SearchPublications&Gesetzesgrundlage=All&Category=InvitationToTender"
 
     def __init__(self):
         """Initialize scraper."""
@@ -80,25 +81,20 @@ class BawueScraper(BaseScraper):
                     logger.debug("Found %d tenders on page %d", len(results), page_num)
 
                     for result in results:
-                        # Apply early filter
+                        # Apply early filter with CPV codes (public sector IT)
                         if should_skip_project(
                             result.get("title", ""),
                             result.get("description", ""),
+                            cpv_codes=["72000000-5"],  # IT-Dienstleistungen
                         ):
                             logger.debug("Skipping (early filter): %s", result.get("title", "")[:50])
                             continue
 
-                        # Get details
-                        project = await self._get_tender_details(
-                            page,
-                            result.get("external_id", ""),
-                            result.get("url", ""),
-                            result,
-                        )
+                        # Create project directly from search results
+                        # (Detail page navigation is slow and causes state loss)
+                        project = self._create_project_from_result(result)
                         if project:
                             projects.append(project)
-
-                        await asyncio.sleep(settings.scraper_delay_seconds)
 
                     # Navigate to next page
                     if page_num < max_pages:
@@ -111,6 +107,38 @@ class BawueScraper(BaseScraper):
 
         logger.info("BaWü: scraped %d tenders", len(projects))
         return projects
+
+    def _create_project_from_result(self, result: dict) -> Optional[RawProject]:
+        """Create RawProject directly from search result data.
+
+        Args:
+            result: Dictionary with parsed search result data
+
+        Returns:
+            RawProject or None
+        """
+        title = result.get("title", "").strip()
+        if not title or len(title) < 5:
+            return None
+
+        external_id = result.get("external_id", "")
+        if not external_id:
+            import hashlib
+            external_id = f"bawue_{hashlib.md5(title.encode()).hexdigest()[:12]}"
+
+        return RawProject(
+            source="bawue",
+            external_id=external_id,
+            url=result.get("url", self.BASE_URL),
+            title=title,
+            client_name=result.get("client_name"),
+            description=result.get("description"),
+            public_sector=True,
+            project_type="tender",
+            cpv_codes=["72000000-5"],  # IT-Dienstleistungen
+            tender_deadline=result.get("deadline"),
+            published_at=result.get("published_at"),
+        )
 
     async def _handle_cookie_consent(self, page) -> None:
         """Handle cookie consent popup."""
@@ -135,47 +163,67 @@ class BawueScraper(BaseScraper):
             pass
 
     async def _navigate_to_search(self, page) -> None:
-        """Navigate to the public tenders search page."""
+        """Navigate to the public tenders search page.
+
+        BaWü portal structure:
+        - Uses PublicationSearchControllerServlet with parameters
+        - Category: InvitationToTender for active tenders
+        - Gesetzesgrundlage: VOL (Lieferungen/Dienstleistungen), VOB (Bau), All
+        """
         try:
-            # Look for link to public tenders
-            search_selectors = [
-                "a:has-text('Ausschreibungen')",
-                "a:has-text('Bekanntmachungen')",
-                "a:has-text('Öffentliche Ausschreibungen')",
-                "a:has-text('Suche')",
-                "a[href*='search']",
-                "a[href*='publication']",
-            ]
-
-            for selector in search_selectors:
-                link = await page.query_selector(selector)
-                if link:
-                    await link.click()
-                    await page.wait_for_load_state("domcontentloaded")
-                    await asyncio.sleep(1)
-                    logger.debug("Navigated to search page")
-                    return
-
-            # If no link found, try direct URL
+            # First try direct navigation to search URL
             await page.goto(
                 self.SEARCH_URL,
                 wait_until="domcontentloaded",
                 timeout=settings.scraper_timeout_ms,
             )
+            await asyncio.sleep(1)
+
+            # If we ended up on a login page, look for public access link
+            public_links = [
+                "a[href*='InvitationToTender']",
+                "a:has-text('Ausschreibungen')",
+                "a:has-text('Bekanntmachungen')",
+                "a:has-text('Öffentliche Ausschreibungen')",
+            ]
+
+            for selector in public_links:
+                link = await page.query_selector(selector)
+                if link:
+                    await link.click()
+                    await page.wait_for_load_state("domcontentloaded")
+                    await asyncio.sleep(1)
+                    logger.debug("Navigated to public tenders page")
+                    return
 
         except Exception as e:
             logger.debug("Could not navigate to search: %s", e)
 
     async def _apply_it_filter(self, page) -> None:
-        """Apply IT category filter."""
+        """Apply IT category filter.
+
+        BaWü portal uses URL parameters for filtering:
+        - Gesetzesgrundlage=VOL for services (including IT)
+        - No direct CPV filter in UI, filtering done post-scrape
+        """
         try:
-            # Look for category/CPV filter
+            # Try to filter by VOL (Liefer-/Dienstleistungen) which includes IT
+            vol_link = await page.query_selector(
+                "a[href*='Gesetzesgrundlage=VOL']"
+            )
+            if vol_link:
+                await vol_link.click()
+                await page.wait_for_load_state("domcontentloaded")
+                await asyncio.sleep(1)
+                logger.debug("Filtered to VOL (Dienstleistungen)")
+                return
+
+            # Alternative: Look for category/CPV filter elements
             filter_selectors = [
                 "select[name*='category']",
                 "select[name*='cpv']",
                 "input[name*='cpv']",
-                "#categoryFilter",
-                "select[name*='branche']",
+                "input[type='search']",
             ]
 
             for selector in filter_selectors:
@@ -187,20 +235,20 @@ class BawueScraper(BaseScraper):
                         options = await el.query_selector_all("option")
                         for opt in options:
                             text = (await opt.inner_text()).lower()
-                            if any(kw in text for kw in ["it", "software", "dv", "72"]):
+                            if any(kw in text for kw in ["it", "software", "dv", "72", "dienstleistung"]):
                                 value = await opt.get_attribute("value")
                                 await el.select_option(value=value)
                                 logger.debug("Selected IT category")
                                 break
                     elif tag.lower() == "input":
-                        await el.fill("72")
+                        await el.fill("Software IT")
                         await asyncio.sleep(0.5)
 
                     break
 
-            # Submit search
+            # Submit if button present
             submit_btn = await page.query_selector(
-                "button[type='submit'], input[type='submit'], .search-btn, #searchButton"
+                "button[type='submit'], input[type='submit'], .search-btn, button:has-text('Suchen')"
             )
             if submit_btn:
                 await submit_btn.click()
@@ -282,20 +330,49 @@ class BawueScraper(BaseScraper):
     async def _goto_next_page(self, page) -> bool:
         """Navigate to next results page.
 
+        BaWü portal uses Start parameter for pagination:
+        - Start=0 (page 1), Start=50 (page 2), Start=100 (page 3), etc.
+
         Returns:
             True if successful, False if no more pages
         """
         try:
+            # Get current URL to determine next page
+            current_url = page.url
+
+            # BaWü uses pagination links with Start parameter
             next_selectors = [
-                ".pagination .next:not(.disabled)",
-                "a[aria-label='Nächste']",
+                ".pagination a[href*='Start=']:not(.active)",
+                ".pagination-sm a[href*='Start=']",
                 "a[rel='next']",
-                ".pager-next a",
+                "a:has-text('>')",
                 "a:has-text('Weiter')",
                 "a:has-text('»')",
             ]
 
             for selector in next_selectors:
+                links = await page.query_selector_all(selector)
+                for link in links:
+                    href = await link.get_attribute("href") or ""
+                    # Check if this is the next page (higher Start value)
+                    if "Start=" in href:
+                        current_start = 0
+                        if "Start=" in current_url:
+                            match = re.search(r"Start=(\d+)", current_url)
+                            if match:
+                                current_start = int(match.group(1))
+
+                        next_match = re.search(r"Start=(\d+)", href)
+                        if next_match:
+                            next_start = int(next_match.group(1))
+                            if next_start > current_start:
+                                await link.click()
+                                await page.wait_for_load_state("domcontentloaded")
+                                await asyncio.sleep(2)
+                                return True
+
+            # Fallback: standard next selectors
+            for selector in [".pagination .next:not(.disabled) a", "a[aria-label='Nächste']"]:
                 next_link = await page.query_selector(selector)
                 if next_link:
                     await next_link.click()

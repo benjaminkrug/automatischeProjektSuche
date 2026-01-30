@@ -151,7 +151,7 @@ def main():
 
         col_cap, col_count = st.columns([3, 1])
         with col_cap:
-            st.progress(tender_count / max_tenders if max_tenders > 0 else 0)
+            st.progress(min(tender_count / max_tenders, 1.0) if max_tenders > 0 else 0)
         with col_count:
             st.caption(f"Aktiv: {tender_count}/{max_tenders}")
 

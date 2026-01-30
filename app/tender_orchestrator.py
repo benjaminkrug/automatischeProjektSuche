@@ -189,13 +189,32 @@ class TenderOrchestrator:
 
             # 4. Dedupe and save
             new_projects = self._save_and_dedupe(cpv_filtered)
-            if not new_projects:
-                logger.info("Keine neuen Ausschreibungen gefunden.")
+
+            # 4b. Also get existing 'new' status tenders for re-analysis
+            pending_projects = self._get_pending_tenders()
+            if pending_projects:
+                logger.info(
+                    "Zusätzlich %d bestehende Tenders mit Status 'new' zur Analyse",
+                    len(pending_projects),
+                )
+
+            # Combine new + pending (unique by ID)
+            all_to_process = list(new_projects)
+            processed_ids = {p.id for p in all_to_process}
+            for p in pending_projects:
+                if p.id not in processed_ids:
+                    all_to_process.append(p)
+                    processed_ids.add(p.id)
+
+            if not all_to_process:
+                logger.info("Keine Ausschreibungen zu analysieren.")
                 self._stats.log_summary()
                 return self._stats
 
-            # 5-11. Process each new project
-            for project in new_projects:
+            logger.info("Insgesamt %d Ausschreibungen zu analysieren", len(all_to_process))
+
+            # 5-11. Process each project
+            for project in all_to_process:
                 self._process_tender(project)
 
             # Send email notification for high-priority tenders
@@ -246,6 +265,21 @@ class TenderOrchestrator:
                 Project.status.in_(["applied", "review"]),
             )
             .count()
+        )
+
+    def _get_pending_tenders(self) -> List[Project]:
+        """Get existing tenders with status 'new' for re-analysis.
+
+        This allows re-processing tenders that were previously rejected
+        but need to be re-scored (e.g., after scoring logic changes).
+        """
+        return (
+            self.db.query(Project)
+            .filter(
+                Project.project_type == "tender",
+                Project.status == "new",
+            )
+            .all()
         )
 
     async def _scrape_tender_portals(self) -> List:

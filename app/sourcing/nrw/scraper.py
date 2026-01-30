@@ -26,12 +26,11 @@ class NrwScraper(BaseScraper):
 
     BASE_URL = "https://www.evergabe.nrw.de"
 
-    # Search URL with IT category filter
-    # Note: Exact parameters may need adjustment based on actual portal structure
-    SEARCH_URL = f"{BASE_URL}/VMPSat498/vergabe/index.html"
+    # Search URL - direkt IT-Dienstleistungen (CPV 72000000-5)
+    SEARCH_URL = f"{BASE_URL}/VMPCenter/company/announcements/categoryOverview.do?method=showTable&cpvCode=72000000-5"
 
-    # IT-related category codes (portal-specific)
-    IT_CATEGORIES = ["72", "48"]  # CPV prefixes for IT
+    # IT-related CPV category codes
+    IT_CPV_CODES = ["72000000-5"]  # IT-Dienstleistungen
 
     def __init__(self):
         """Initialize scraper."""
@@ -83,24 +82,20 @@ class NrwScraper(BaseScraper):
 
                     for result in results:
                         # Apply early filter
+                        # Pass CPV codes since we're already on IT category page
                         if should_skip_project(
                             result.get("title", ""),
                             result.get("description", ""),
+                            cpv_codes=["72000000-5"],  # IT-Dienstleistungen
                         ):
                             logger.debug("Skipping (early filter): %s", result.get("title", "")[:50])
                             continue
 
-                        # Get details if URL available
-                        project = await self._get_tender_details(
-                            page,
-                            result.get("external_id", ""),
-                            result.get("url", ""),
-                            result,
-                        )
+                        # Create project directly from search results
+                        # (Detail page navigation is slow and causes state loss)
+                        project = self._create_project_from_result(result)
                         if project:
                             projects.append(project)
-
-                        await asyncio.sleep(settings.scraper_delay_seconds)
 
                     # Navigate to next page
                     if page_num < max_pages:
@@ -113,6 +108,41 @@ class NrwScraper(BaseScraper):
 
         logger.info("NRW: scraped %d tenders", len(projects))
         return projects
+
+    def _create_project_from_result(self, result: dict) -> Optional[RawProject]:
+        """Create RawProject directly from search result data.
+
+        This is faster than navigating to detail pages and avoids
+        browser state issues.
+
+        Args:
+            result: Dictionary with parsed search result data
+
+        Returns:
+            RawProject or None
+        """
+        title = result.get("title", "").strip()
+        if not title or len(title) < 5:
+            return None
+
+        external_id = result.get("external_id", "")
+        if not external_id:
+            import hashlib
+            external_id = f"nrw_{hashlib.md5(title.encode()).hexdigest()[:12]}"
+
+        return RawProject(
+            source="nrw",
+            external_id=external_id,
+            url=result.get("url", self.BASE_URL),
+            title=title,
+            client_name=result.get("client_name"),
+            description=result.get("description"),
+            public_sector=True,
+            project_type="tender",
+            cpv_codes=["72000000-5"],  # IT-Dienstleistungen (from search filter)
+            tender_deadline=result.get("deadline"),
+            published_at=result.get("published_at"),
+        )
 
     async def _handle_cookie_consent(self, page) -> None:
         """Handle cookie consent popup if present."""
@@ -138,47 +168,54 @@ class NrwScraper(BaseScraper):
             pass  # No consent popup or already accepted
 
     async def _apply_it_filter(self, page) -> None:
-        """Apply IT category filter on search page."""
+        """Apply IT category filter on search page.
+
+        NRW portal uses CPV category links like:
+        a[href*="categoryOverview.do?cpvCode=72"]
+        """
         try:
-            # Look for category/CPV filter dropdown or input
-            filter_selectors = [
-                "select[name*='category']",
-                "select[name*='cpv']",
-                "input[name*='cpv']",
-                "#categoryFilter",
-                ".category-select",
-            ]
-
-            for selector in filter_selectors:
-                el = await page.query_selector(selector)
-                if el:
-                    tag = await el.evaluate("el => el.tagName")
-
-                    if tag.lower() == "select":
-                        # Try to select IT category option
-                        options = await el.query_selector_all("option")
-                        for opt in options:
-                            text = (await opt.inner_text()).lower()
-                            if any(kw in text for kw in ["it", "software", "dv", "edv", "72"]):
-                                value = await opt.get_attribute("value")
-                                await el.select_option(value=value)
-                                logger.debug("Selected IT category filter")
-                                break
-                    elif tag.lower() == "input":
-                        # Enter CPV code
-                        await el.fill("72")
-                        await asyncio.sleep(0.5)
-
-                    break
-
-            # Submit search/filter if there's a button
-            submit_btn = await page.query_selector(
-                "button[type='submit'], input[type='submit'], .search-button"
+            # Method 1: Click on CPV 72 (IT-Dienstleistungen) category link
+            cpv_link = await page.query_selector(
+                "a[href*='cpvCode=72'], a[href*='cpv=72']"
             )
-            if submit_btn:
-                await submit_btn.click()
+            if cpv_link:
+                await cpv_link.click()
                 await page.wait_for_load_state("domcontentloaded")
                 await asyncio.sleep(1)
+                logger.debug("Selected CPV 72 (IT) category via link")
+                return
+
+            # Method 2: Use search text field
+            search_input = await page.query_selector(
+                "input[name='searchText'], #searchText"
+            )
+            if search_input:
+                await search_input.fill("Software IT Entwicklung")
+                await asyncio.sleep(0.5)
+
+            # Method 3: Use CPV input field if available
+            cpv_input = await page.query_selector(
+                "[data-extended-cpvbox] input, input[name*='cpv']"
+            )
+            if cpv_input:
+                await cpv_input.fill("72")
+                await asyncio.sleep(0.5)
+
+            # Submit search form
+            submit_selectors = [
+                "button[type='submit']",
+                "input[type='submit']",
+                "#searchButton",
+                "button:has-text('Suchen')",
+            ]
+            for selector in submit_selectors:
+                submit_btn = await page.query_selector(selector)
+                if submit_btn:
+                    await submit_btn.click()
+                    await page.wait_for_load_state("domcontentloaded")
+                    await asyncio.sleep(1)
+                    logger.debug("Submitted search form")
+                    break
 
         except Exception as e:
             logger.debug("Could not apply IT filter: %s", e)
@@ -229,12 +266,17 @@ class NrwScraper(BaseScraper):
             project = await parse_detail_page(page, external_id, full_url)
 
             if project:
-                # Fill in any missing data from search results
-                if not project.client_name:
+                # IMPORTANT: Prefer data from search results over detail page
+                # Detail pages often redirect and have navigation elements as titles
+                search_title = result_data.get("title", "")
+                if search_title and len(search_title) > 10:
+                    # Keep search result title if it's meaningful
+                    project.title = search_title
+                if result_data.get("client_name"):
                     project.client_name = result_data.get("client_name")
-                if not project.tender_deadline:
+                if result_data.get("deadline"):
                     project.tender_deadline = result_data.get("deadline")
-                if not project.published_at:
+                if result_data.get("published_at"):
                     project.published_at = result_data.get("published_at")
 
             return project
@@ -258,22 +300,28 @@ class NrwScraper(BaseScraper):
     async def _goto_next_page(self, page) -> bool:
         """Navigate to next results page.
 
+        NRW portal uses: #nextPage (aria-label="nächste Seite")
+
         Returns:
             True if navigation successful, False if no more pages
         """
         try:
             next_selectors = [
+                "#nextPage:not([disabled])",
+                "a[aria-label='nächste Seite']:not(.disabled)",
                 ".pagination .next:not(.disabled)",
                 "a[aria-label='Next']",
                 "a[rel='next']",
-                ".pager-next a",
                 "a:has-text('Weiter')",
-                "a:has-text('>')",
             ]
 
             for selector in next_selectors:
                 next_link = await page.query_selector(selector)
                 if next_link:
+                    # Check if button is disabled
+                    is_disabled = await next_link.get_attribute("disabled")
+                    if is_disabled:
+                        continue
                     await next_link.click()
                     await page.wait_for_load_state("domcontentloaded")
                     await asyncio.sleep(2)

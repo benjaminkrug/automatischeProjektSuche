@@ -26,8 +26,8 @@ class BayernScraper(BaseScraper):
 
     BASE_URL = "https://www.vergabe.bayern.de"
 
-    # Search URL - actual path may vary
-    SEARCH_URL = f"{BASE_URL}/NetServer/PublicationSearchControllerServlet"
+    # Search URL - Auftragsbekanntmachungen
+    SEARCH_URL = f"{BASE_URL}/veroeffentlichungen/auftragsbekanntmachungen/"
 
     def __init__(self):
         """Initialize scraper."""
@@ -80,25 +80,20 @@ class BayernScraper(BaseScraper):
                     logger.debug("Found %d tenders on page %d", len(results), page_num)
 
                     for result in results:
-                        # Apply early filter
+                        # Apply early filter with CPV codes (public sector IT)
                         if should_skip_project(
                             result.get("title", ""),
                             result.get("description", ""),
+                            cpv_codes=["72000000-5"],  # IT-Dienstleistungen
                         ):
                             logger.debug("Skipping (early filter): %s", result.get("title", "")[:50])
                             continue
 
-                        # Get details
-                        project = await self._get_tender_details(
-                            page,
-                            result.get("external_id", ""),
-                            result.get("url", ""),
-                            result,
-                        )
+                        # Create project directly from search results
+                        # (Detail page navigation is slow and causes state loss)
+                        project = self._create_project_from_result(result)
                         if project:
                             projects.append(project)
-
-                        await asyncio.sleep(settings.scraper_delay_seconds)
 
                     # Navigate to next page
                     if page_num < max_pages:
@@ -111,6 +106,38 @@ class BayernScraper(BaseScraper):
 
         logger.info("Bayern: scraped %d tenders", len(projects))
         return projects
+
+    def _create_project_from_result(self, result: dict) -> Optional[RawProject]:
+        """Create RawProject directly from search result data.
+
+        Args:
+            result: Dictionary with parsed search result data
+
+        Returns:
+            RawProject or None
+        """
+        title = result.get("title", "").strip()
+        if not title or len(title) < 5:
+            return None
+
+        external_id = result.get("external_id", "")
+        if not external_id:
+            import hashlib
+            external_id = f"bayern_{hashlib.md5(title.encode()).hexdigest()[:12]}"
+
+        return RawProject(
+            source="bayern",
+            external_id=external_id,
+            url=result.get("url", self.BASE_URL),
+            title=title,
+            client_name=result.get("client_name"),
+            description=result.get("description"),
+            public_sector=True,
+            project_type="tender",
+            cpv_codes=["72000000-5"],  # IT-Dienstleistungen
+            tender_deadline=result.get("deadline"),
+            published_at=result.get("published_at"),
+        )
 
     async def _handle_cookie_consent(self, page) -> None:
         """Handle cookie consent popup."""
@@ -135,16 +162,20 @@ class BayernScraper(BaseScraper):
             pass
 
     async def _navigate_to_search(self, page) -> None:
-        """Navigate to the public tenders search page."""
+        """Navigate to the public tenders search page.
+
+        Bayern portal structure:
+        - /veroeffentlichungen/auftragsbekanntmachungen/ for tenders
+        - Navigation links in main menu
+        """
         try:
             # Look for link to public tenders
             search_selectors = [
+                "a[href*='auftragsbekanntmachungen']",
+                "a:has-text('Auftragsbekanntmachungen')",
                 "a:has-text('Ausschreibungen')",
                 "a:has-text('Bekanntmachungen')",
-                "a:has-text('Öffentliche Ausschreibungen')",
-                "a:has-text('Suche')",
-                "a[href*='search']",
-                "a[href*='publikation']",
+                "a[href*='veroeffentlichungen']",
             ]
 
             for selector in search_selectors:
@@ -167,9 +198,22 @@ class BayernScraper(BaseScraper):
             logger.debug("Could not navigate to search: %s", e)
 
     async def _apply_it_filter(self, page) -> None:
-        """Apply IT category filter."""
+        """Apply IT category filter.
+
+        Bayern portal may have:
+        - Search text input
+        - Category/CPV filter links or dropdowns
+        """
         try:
-            # Look for category/CPV filter
+            # Method 1: Look for search input and enter IT keywords
+            search_input = await page.query_selector(
+                "input[type='search'], input[type='text'][name*='search'], input[placeholder*='Such']"
+            )
+            if search_input:
+                await search_input.fill("Software IT Entwicklung")
+                await asyncio.sleep(0.5)
+
+            # Method 2: Look for category/CPV filter
             filter_selectors = [
                 "select[name*='category']",
                 "select[name*='cpv']",
@@ -187,7 +231,7 @@ class BayernScraper(BaseScraper):
                         options = await el.query_selector_all("option")
                         for opt in options:
                             text = (await opt.inner_text()).lower()
-                            if any(kw in text for kw in ["it", "software", "dv", "72"]):
+                            if any(kw in text for kw in ["it", "software", "dv", "72", "dienstleistung"]):
                                 value = await opt.get_attribute("value")
                                 await el.select_option(value=value)
                                 logger.debug("Selected IT category")
@@ -198,9 +242,9 @@ class BayernScraper(BaseScraper):
 
                     break
 
-            # Submit search
+            # Submit search if form present
             submit_btn = await page.query_selector(
-                "button[type='submit'], input[type='submit'], .search-btn, #searchButton"
+                "button[type='submit'], input[type='submit'], .search-btn, #searchButton, button:has-text('Suchen')"
             )
             if submit_btn:
                 await submit_btn.click()
@@ -282,22 +326,33 @@ class BayernScraper(BaseScraper):
     async def _goto_next_page(self, page) -> bool:
         """Navigate to next results page.
 
+        Bayern portal typically uses standard pagination links.
+
         Returns:
             True if successful, False if no more pages
         """
         try:
             next_selectors = [
-                ".pagination .next:not(.disabled)",
+                ".pagination .next:not(.disabled) a",
+                ".pagination a[rel='next']",
+                "a[aria-label='Nächste Seite']",
                 "a[aria-label='Nächste']",
                 "a[rel='next']",
                 ".pager-next a",
                 "a:has-text('Weiter')",
                 "a:has-text('»')",
+                "a:has-text('>')",
             ]
 
             for selector in next_selectors:
                 next_link = await page.query_selector(selector)
                 if next_link:
+                    # Check if link is disabled
+                    parent = await next_link.query_selector("xpath=..")
+                    if parent:
+                        parent_class = await parent.get_attribute("class") or ""
+                        if "disabled" in parent_class:
+                            continue
                     await next_link.click()
                     await page.wait_for_load_state("domcontentloaded")
                     await asyncio.sleep(2)

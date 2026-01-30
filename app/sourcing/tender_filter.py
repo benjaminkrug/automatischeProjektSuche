@@ -172,6 +172,40 @@ WEBAPP_PATTERNS = [
     r"digitalisierung.*(?:prozess|verwaltung|service)",
     r"e[- ]?government",
     r"(?:web|browser)[- ]?basiert(?:e|es)?\s+(?:anwendung|system|lösung)",
+
+    # === NEU: Verwaltungssysteme (häufig in öffentlichen Ausschreibungen) ===
+    r"(?:fach|sachbearbeitungs)[- ]?verfahren",
+    r"verwaltungs[- ]?system",
+    r"case[- ]?management[- ]?system",
+    r"(?:document|dokument)[- ]?management",
+    r"(?:dms|dokumenten[- ]?verwaltung)",
+
+    # === NEU: Business-Systeme ===
+    r"(?:cms|content[- ]?management)",
+    r"(?:crm|customer[- ]?relationship)",
+    r"(?:erp|enterprise[- ]?resource)",
+    r"(?:hr|personal)[- ]?management[- ]?system",
+    r"(?:workflow|prozess)[- ]?(?:management|automation)",
+
+    # === NEU: Portale & Services ===
+    r"(?:bürger|citizen)[- ]?(?:portal|service)",
+    r"(?:service)[- ]?portal",
+    r"(?:intranet|extranet)",
+    r"(?:collaboration|teamwork)[- ]?(?:plattform|lösung)",
+
+    # === NEU: Analytics & Reporting ===
+    r"(?:data|business|analytics)[- ]?dashboard",
+    r"(?:reporting|auswertungs)[- ]?(?:tool|system)",
+    r"(?:bi|business[- ]?intelligence)",
+
+    # === NEU: Modernisierung (oft Web-Migration) ===
+    r"(?:modernisierung|ablösung|migration)\s+.{0,30}(?:system|anwendung|software)",
+    r"(?:neuausschreibung|erneuerung)\s+.{0,20}(?:system|anwendung)",
+
+    # === NEU: Learning & Training ===
+    r"(?:e[- ]?)?learning[- ]?(?:plattform|system)",
+    r"(?:lms|learning[- ]?management)",
+    r"(?:schulungs|training)[- ]?(?:portal|plattform)",
 ]
 
 # Mobile App-Indikatoren (explizite Forderung)
@@ -189,6 +223,35 @@ MOBILE_PATTERNS = [
     # M3: Zusätzliche Mobile-Patterns
     rf"app[- ]?{FUZZY_ENTWICKLUNG}",
     rf"mobile[- ]?{FUZZY_ENTWICKLUNG}",
+
+    # === NEU: Deutsche Varianten ===
+    r"(?:smartphone|handy)[- ]?(?:app|anwendung|applikation)",
+    r"(?:tablet|ipad)[- ]?(?:tauglich|optimiert|kompatibel)",
+    r"(?:ios|android)[- ]?(?:kompatibel|fähig|unterstützung)",
+    r"touch[- ]?(?:optimiert|fähig|bedienung)",
+    r"(?:mobil|mobile)[- ]?(?:nutzung|zugriff|version)",
+    r"(?:responsive|adaptiv)[- ]?(?:design|layout|darstellung)",
+    r"(?:pwa|progressive\s+web\s+app)",
+    r"offline[- ]?(?:fähig|nutzung|modus)",
+    r"(?:push|benachrichtigungs)[- ]?(?:funktion|dienst)",
+    r"(?:geräte|device)[- ]?(?:unabhängig|übergreifend)",
+
+    # === NEU: App-Store & Distribution ===
+    r"app[- ]?store",
+    r"(?:google\s+)?play\s+store",
+    r"(?:apple\s+)?app\s+store",
+
+    # === NEU: Mobile-spezifische Funktionen ===
+    r"(?:gps|standort)[- ]?(?:basiert|funktion|dienst)",
+    r"(?:kamera|foto)[- ]?(?:funktion|integration)",
+    r"(?:qr|barcode)[- ]?(?:scan|reader|erkennung)",
+    r"nfc[- ]?(?:funktion|fähig|unterstützung)",
+    r"biometr(?:ie|isch)[- ]?(?:authentifizierung|login|zugang)",
+
+    # === NEU: Mobile-First & Responsive ===
+    r"mobile[- ]?first",
+    r"(?:mobil|mobile)[- ]?(?:endgerät|device|plattform)",
+    r"(?:smartphone|tablet)[- ]?(?:version|variante|ansicht)",
 ]
 
 # Pre-compiled regex patterns for performance
@@ -748,6 +811,13 @@ def score_tender(
             "digitale lösung", "it-system", "fachverfahren", "individualsoftware",
             "fachanwendung", "it-dienstleistung", "management-system",
             "informationssystem", "dokumentation", "plattform",
+            # === NEU: Erweiterte Keywords ===
+            "it-projekt", "onlinedienst", "e-service",
+            "registeranwendung", "meldesystem", "buchungssystem",
+            "verwaltungsanwendung", "behördensoftware", "amtssystem",
+            "onlineverfahren", "digitaldienst", "e-akte",
+            "digitalisierungsprojekt", "softwareprojekt",
+            "webbasiert", "browserbasiert", "cloudbasiert",
         ]
         combined_lower = combined_text.lower()
         has_software_hint = any(kw in combined_lower for kw in software_fallback_keywords)
@@ -757,9 +827,9 @@ def score_tender(
             score.skip_reason = "Keine Web/Mobile-Entwicklung gefordert"
             return score
         else:
-            # Nicht skippen, aber Score reduzieren
-            score.reasons.append("Tech-Fit unklar - Software-Keywords gefunden")
-            score.tech_score = 5  # Minimaler Tech-Score statt 0
+            # Software-Keywords gefunden - in Review-Queue zur manuellen Prüfung
+            score.reasons.append("Tech-Fit unklar - Software-Keywords gefunden -> Review")
+            score.tech_score = 50  # Garantiert Review-Queue (Schwelle = 50)
 
     # ============================================================
     # VOLUMEN (DEAKTIVIERT - nicht relevant für erste Sichtung)

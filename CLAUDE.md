@@ -88,17 +88,21 @@ app/
 5. evergabe-online.de (600+ Vergabestellen)
 6. simap.ch (Schweiz)
 7. TED (EU tenders)
+8. NRW (evergabe.nrw.de - bevölkerungsreichstes Bundesland)
+9. Baden-Württemberg (vergabe.landbw.de - IT/Automotive)
 
 **Freelance Portale (Aktiv):**
-8. freelancermap
-9. GULP
-10. Freelance.de
+10. freelancermap
+11. GULP
+12. Freelance.de
 
 **Deaktiviert:**
+- Bayern (vergabe.bayern.de - nur Infoseite, Daten hinter RIB-Software-Login)
 - Malt (kein öffentliches Projektlisting)
 - LinkedIn Jobs (Login/Anti-Bot)
 - Upwork (CAPTCHA/Anti-Bot)
 - vergabe24 (liefert Infotexte statt Ausschreibungen)
+- oeffentlichevergabe (API endpoint nicht verifiziert)
 
 ## Pipeline Flows
 

@@ -13,6 +13,10 @@ logger = get_logger("sourcing.bayern.parser")
 async def parse_search_results(page) -> List[dict]:
     """Parse search results page into raw data dictionaries.
 
+    Bayern portal structure:
+    - Results may be in table format or list format
+    - Detail links point to specific tender pages
+
     Args:
         page: Playwright page object
 
@@ -24,25 +28,38 @@ async def parse_search_results(page) -> List[dict]:
     try:
         # Wait for results to load
         await page.wait_for_selector(
-            "table, .tender-list, .search-results, .result-item",
-            timeout=10000,
+            "table tbody tr, .tender-list, .search-results, .result-item, article, .publication-item",
+            timeout=15000,
         )
 
-        # Try multiple selectors
+        # Try multiple selectors for different page structures
         selectors = [
-            "table.results tbody tr",
+            "table tbody tr",
+            "table tr:not(:first-child)",
             ".tender-item",
             ".search-result-item",
             ".vergabe-item",
+            ".publication-item",
+            "article.tender",
             "[data-tender-id]",
+            "main .item",
+            "#main .result",
         ]
 
         items = []
         for selector in selectors:
             items = await page.query_selector_all(selector)
             if items:
-                logger.debug("Found %d results with selector: %s", len(items), selector)
-                break
+                # Filter out header rows
+                filtered_items = []
+                for item in items:
+                    th = await item.query_selector("th")
+                    if not th:
+                        filtered_items.append(item)
+                items = filtered_items
+                if items:
+                    logger.debug("Found %d results with selector: %s", len(items), selector)
+                    break
 
         for item in items:
             try:
@@ -73,66 +90,76 @@ async def _parse_result_item(item) -> Optional[dict]:
     # Try table row format first (common in government portals)
     cells = await item.query_selector_all("td")
     if cells and len(cells) >= 3:
-        # Table format: typically ID | Title | Authority | Deadline
-        if len(cells) >= 1:
-            cell_text = await cells[0].inner_text()
-            # First cell might be ID or title
-            if re.match(r"^\d{4,}$", cell_text.strip()):
-                data["external_id"] = cell_text.strip()
-                if len(cells) >= 2:
-                    title_cell = cells[1]
-                    data["title"] = (await title_cell.inner_text()).strip()
-                    href = await title_cell.query_selector("a")
-                    if href:
-                        data["url"] = await href.get_attribute("href")
-            else:
-                # First cell is probably title
-                data["title"] = cell_text.strip()
-                link = await cells[0].query_selector("a")
-                if link:
-                    data["url"] = await link.get_attribute("href")
+        # Scan all cells for relevant data
+        for i, cell in enumerate(cells):
+            cell_text = (await cell.inner_text()).strip()
 
-        # Extract client
-        if len(cells) >= 3:
-            data["client_name"] = (await cells[2].inner_text()).strip()
+            # Look for links - usually contain title
+            link = await cell.query_selector("a")
+            if link and not data.get("title"):
+                data["title"] = cell_text
+                href = await link.get_attribute("href")
+                if href:
+                    data["url"] = href if href.startswith("http") else f"https://www.vergabe.bayern.de{href}"
 
-        # Extract deadline (usually last or second-to-last cell)
-        if len(cells) >= 4:
-            deadline_text = await cells[-1].inner_text()
-            data["deadline"] = _parse_date(deadline_text.strip())
+            # Check for ID pattern (numeric)
+            if re.match(r"^\d{4,}$", cell_text) and not data.get("external_id"):
+                data["external_id"] = cell_text
+                continue
+
+            # Check for date pattern
+            date = _parse_date(cell_text)
+            if date:
+                if not data.get("deadline"):
+                    data["deadline"] = date
+                elif not data.get("published_at"):
+                    data["published_at"] = date
 
     else:
-        # Non-table format
-        # Extract title
-        title_el = await item.query_selector(
-            "h3, h4, .title, .tender-title, a.result-link"
-        )
-        if title_el:
-            data["title"] = (await title_el.inner_text()).strip()
-            href = await title_el.get_attribute("href")
-            if href:
-                data["url"] = href
+        # Non-table format - article or div based
+        # Extract title from headings or links
+        title_selectors = [
+            "h2 a", "h3 a", "h4 a",
+            "h2", "h3", "h4",
+            ".title", ".tender-title",
+            "a.result-link", "a[href*='vergabe']",
+        ]
+        for selector in title_selectors:
+            title_el = await item.query_selector(selector)
+            if title_el:
+                data["title"] = (await title_el.inner_text()).strip()
+                href = await title_el.get_attribute("href")
+                if href:
+                    data["url"] = href if href.startswith("http") else f"https://www.vergabe.bayern.de{href}"
+                if data["title"]:
+                    break
 
         # Extract external ID
-        id_el = await item.query_selector(".tender-id, .reference-number")
+        id_el = await item.query_selector(".tender-id, .reference-number, .vergabe-nr")
         if id_el:
             data["external_id"] = (await id_el.inner_text()).strip()
 
         # Extract client
-        client_el = await item.query_selector(".authority, .client, .vergabestelle")
+        client_el = await item.query_selector(".authority, .client, .vergabestelle, .auftraggeber")
         if client_el:
             data["client_name"] = (await client_el.inner_text()).strip()
 
         # Extract deadline
-        deadline_el = await item.query_selector(".deadline, .frist, .abgabefrist")
+        deadline_el = await item.query_selector(".deadline, .frist, .abgabefrist, time")
         if deadline_el:
-            data["deadline"] = _parse_date((await deadline_el.inner_text()).strip())
+            deadline_text = await deadline_el.inner_text()
+            data["deadline"] = _parse_date(deadline_text.strip())
 
     # Generate ID from URL if missing
     if not data.get("external_id") and data.get("url"):
-        match = re.search(r"(?:id|oid|tender)=(\d+)|/(\d+)(?:\?|$)", data["url"])
+        match = re.search(r"(?:id|oid|tender|vergabe)=([A-Za-z0-9-]+)|/([A-Za-z0-9-]+)(?:\?|$|\.html)", data["url"])
         if match:
             data["external_id"] = match.group(1) or match.group(2)
+
+    # Generate ID from title if still missing
+    if not data.get("external_id") and data.get("title"):
+        import hashlib
+        data["external_id"] = f"bayern_{hashlib.md5(data['title'].encode()).hexdigest()[:12]}"
 
     return data if data.get("title") else None
 

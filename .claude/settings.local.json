@@ -66,7 +66,15 @@
       "Bash(\"venv\\\\Scripts\\\\python.exe\" -c \"from app.tender_orchestrator import TenderOrchestrator; print\\(''Import OK''\\)\")",
       "Bash(\"venv\\\\Scripts\\\\python.exe\" scripts/reset_tenders.py --dry-run)",
       "WebFetch(domain:api.ted.europa.eu)",
-      "WebFetch(domain:ted.europa.eu)"
+      "WebFetch(domain:ted.europa.eu)",
+      "Bash(venvScriptspython.exe -m pytest tests/test_tender_pipeline.py -v)",
+      "Bash(\"venv/Scripts/python.exe\" -m pytest tests/test_tender_pipeline.py -v)",
+      "Bash(\"venv/Scripts/python.exe\":*)",
+      "Bash(\"venv/Scripts/python.exe\" -c:*)",
+      "Bash(\"venv/Scripts/python.exe\" scripts/run_tenders.py)",
+      "WebFetch(domain:www.evergabe.nrw.de)",
+      "WebFetch(domain:www.vergabe.bayern.de)",
+      "WebFetch(domain:vergabe.landbw.de)"
     ]
   }
 }

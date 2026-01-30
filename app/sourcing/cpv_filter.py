@@ -147,8 +147,9 @@ def _matches_cpv_hierarchy(code: str) -> Tuple[bool, int, str]:
     for prefix_len in [5, 4, 3, 2]:
         prefix = code[:prefix_len]
         if prefix in CPV_HIERARCHY_PREFIXES:
-            # Reduzierter Bonus für Hierarchie-Match (weniger spezifisch)
-            bonus = max(1, 5 - prefix_len)  # Kürzerer Prefix = niedrigerer Bonus
+            # Spezifischere Codes (längerer Prefix) = höherer Bonus
+            # 2-stellig = 1, 3-stellig = 2, 4-stellig = 3, 5-stellig = 4
+            bonus = min(4, prefix_len - 1)
             desc = f"Hierarchie ({prefix}): {CPV_HIERARCHY_PREFIXES[prefix]}"
             logger.debug("CPV hierarchy match: %s -> %s", code, desc)
             return True, bonus, desc
@@ -180,12 +181,19 @@ def passes_cpv_filter(
             "anwendung", "plattform", "app", "webentwicklung",
             "programmierung", "it-system", "digitalisierung",
             "webanwendung", "applikation", "fachverfahren",
-            # === NEU ===
+            # === NEU: Deutsche Begriffe ===
             "informationssystem", "datenbank", "schnittstelle",
             "api", "backend", "frontend", "cloud", "saas",
             "e-government", "onlinedienst", "serviceportal",
             "digitale lösung", "it-dienstleistung", "softwarelösung",
             "individualsoftware", "branchensoftware", "fachanwendung",
+            # === NEU: Erweiterte deutsche Begriffe ===
+            "registerführung", "verwaltungssoftware", "informationstechnik",
+            "datenverarbeitung", "systemintegration", "schnittstellenentwicklung",
+            "it-projekt", "digitaldienst", "e-akte", "fachsystem",
+            "onlineverfahren", "e-service", "managementsystem",
+            "datenmigration", "systemablösung", "modernisierung",
+            "browseranwendung", "webbasiert", "onlineplattform",
         ]
         if any(kw in text for kw in software_keywords):
             return CpvFilterResult(

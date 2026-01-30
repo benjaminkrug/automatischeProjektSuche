@@ -80,15 +80,15 @@ PORTAL_CONFIGS: Dict[str, PortalSearchConfig] = {
     ),
     # NRW Vergabeportal - bevölkerungsreichstes Bundesland
     "nrw": PortalSearchConfig(
-        enabled=False,  # Playwright selectors need adjustment - disabled until fixed
+        enabled=True,  # Selektoren aktualisiert für evergabe.nrw.de
     ),
     # Bayern Vergabeportal - starker Tech-Sektor
     "bayern": PortalSearchConfig(
-        enabled=False,  # Playwright selectors need adjustment - disabled until fixed
+        enabled=False,  # Deaktiviert: vergabe.bayern.de ist nur Infoseite, keine öffentliche Ausschreibungsliste
     ),
     # Baden-Württemberg Vergabeportal - IT/Automotive
     "bawue": PortalSearchConfig(
-        enabled=False,  # Playwright selectors need adjustment - disabled until fixed
+        enabled=True,  # Selektoren aktualisiert für vergabe.landbw.de
     ),
 }
 
